@@ -29,11 +29,12 @@ logger = logging.getLogger(__name__)
 RAW_DIR = Path(__file__).resolve().parent / "data" / "raw"
 
 PARSERS = {
-    "appendix_5b":    parse_appendix_5b,
-    "resource_update": parse_resource,
-    "drill_results":  parse_drill_results,
-    "capital_raise":  parse_capital_raise,
-    "study":          parse_study,
+    "appendix_5b":      parse_appendix_5b,
+    "quarterly_report": parse_appendix_5b,
+    "resource_update":  parse_resource,
+    "drill_results":    parse_drill_results,
+    "capital_raise":    parse_capital_raise,
+    "study":            parse_study,
 }
 
 
@@ -47,6 +48,7 @@ def _classify_from_content(doc_id: str) -> str:
 
     pdf_path = Path(__file__).resolve().parent / row["local_path"]
     if not pdf_path.exists():
+        logger.warning("PDF not found for reclassification: %s", pdf_path)
         return "other"
 
     try:
@@ -143,7 +145,11 @@ def run_pipeline(ticker: str | None = None) -> dict:
                 logger.info("Reclassified %s as '%s' from PDF content", doc_id, doc_type)
 
         if not parser:
-            logger.info("No parser for doc_type '%s' — skipping %s", doc_type, doc_id)
+            logger.info("No parser for doc_type '%s' — marking needs_review %s", doc_type, doc_id)
+            conn2 = get_connection()
+            conn2.execute("UPDATE documents SET parse_status = 'needs_review' WHERE id = ?", (doc_id,))
+            conn2.commit()
+            conn2.close()
             stats["skipped"] += 1
             continue
 

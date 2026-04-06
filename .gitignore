@@ -2,9 +2,13 @@ data/raw/
 data/staging.db
 .env
 CLAUDE.md
+AGENTS.md
 __pycache__/
 *.pyc
 .venv/
 output/
 *.png
 node_modules/
+.next/
+frontend/.next/
+frontend/node_modules/

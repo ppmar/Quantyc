@@ -9,13 +9,18 @@ Usage:
 """
 
 import hashlib
+import logging
 import os
 import threading
+import traceback
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 from db import get_connection, init_db
 from pipeline.classifier import classify_title
@@ -280,10 +285,15 @@ def api_upload():
 
     # Run pipeline in background for this ticker
     def run_parse():
-        from parse import run_pipeline
-        run_pipeline(ticker)
+        try:
+            logger.info(f"Starting pipeline for {ticker}")
+            from parse import run_pipeline
+            run_pipeline(ticker)
+            logger.info(f"Pipeline completed for {ticker}")
+        except Exception:
+            logger.error(f"Pipeline failed for {ticker}:\n{traceback.format_exc()}")
 
-    thread = threading.Thread(target=run_parse)
+    thread = threading.Thread(target=run_parse, daemon=True)
     thread.start()
 
     return jsonify({
@@ -298,10 +308,15 @@ def api_parse():
     ticker = request.json.get("ticker") if request.is_json else None
 
     def run_parse():
-        from parse import run_pipeline
-        run_pipeline(ticker)
+        try:
+            logger.info(f"Starting pipeline for {ticker or 'all'}")
+            from parse import run_pipeline
+            run_pipeline(ticker)
+            logger.info(f"Pipeline completed for {ticker or 'all'}")
+        except Exception:
+            logger.error(f"Pipeline failed for {ticker or 'all'}:\n{traceback.format_exc()}")
 
-    thread = threading.Thread(target=run_parse)
+    thread = threading.Thread(target=run_parse, daemon=True)
     thread.start()
     return jsonify({"status": "started", "ticker": ticker or "all"})
 

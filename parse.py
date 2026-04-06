@@ -42,6 +42,8 @@ def register_pdfs(ticker: str | None = None) -> int:
     conn = get_connection()
     registered = 0
 
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+
     if ticker:
         dirs = [RAW_DIR / ticker.upper()]
     else:

@@ -10,6 +10,7 @@ COPY . .
 # Data directories - will be mounted as volumes
 RUN mkdir -p data/raw
 
-EXPOSE 8000
+ENV PORT=8000
+EXPOSE ${PORT}
 
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120"]
+CMD gunicorn app:app --bind 0.0.0.0:${PORT} --workers 2 --timeout 120

@@ -1,6 +1,7 @@
 data/raw/
 data/staging.db
 .env
+CLAUDE.md
 __pycache__/
 *.pyc
 .venv/

@@ -137,10 +137,11 @@ export default function DashboardPage() {
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      background: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
+                      background: "#1a1a2e",
+                      border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: "8px",
                       fontSize: "13px",
+                      color: "#e5e5e5",
                     }}
                   />
                 </PieChart>
@@ -188,7 +189,7 @@ export default function DashboardPage() {
                   <XAxis
                     dataKey="stage"
                     tick={{
-                      fill: "hsl(var(--muted-foreground))",
+                      fill: "#a3a3a3",
                       fontSize: 12,
                     }}
                     axisLine={false}
@@ -196,7 +197,7 @@ export default function DashboardPage() {
                   />
                   <YAxis
                     tick={{
-                      fill: "hsl(var(--muted-foreground))",
+                      fill: "#a3a3a3",
                       fontSize: 12,
                     }}
                     axisLine={false}
@@ -205,15 +206,16 @@ export default function DashboardPage() {
                   />
                   <Tooltip
                     contentStyle={{
-                      background: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
+                      background: "#1a1a2e",
+                      border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: "8px",
                       fontSize: "13px",
+                      color: "#e5e5e5",
                     }}
                   />
                   <Bar
                     dataKey="count"
-                    fill="hsl(var(--primary))"
+                    fill="#eab308"
                     radius={[4, 4, 0, 0]}
                   />
                 </BarChart>

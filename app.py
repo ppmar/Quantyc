@@ -8,14 +8,20 @@ Usage:
     gunicorn app:app -b 0.0.0.0:$PORT    # production (Railway)
 """
 
+import hashlib
 import os
 import threading
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 from db import get_connection, init_db
+from pipeline.classifier import classify_title
 from valuation.engine import valuate_ticker, valuate_all
+
+RAW_DIR = Path(__file__).resolve().parent / "data" / "raw"
 
 app = Flask(__name__)
 CORS(app)
@@ -218,6 +224,73 @@ def api_drill(ticker):
         (ticker.upper(),),
     )
     return jsonify(rows)
+
+
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    """
+    Upload PDFs for a ticker. Accepts multipart form data with:
+    - ticker: company ticker (required)
+    - files: one or more PDF files
+    Auto-registers, classifies, parses, normalizes, and loads each file.
+    """
+    ticker = request.form.get("ticker", "").strip().upper()
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files provided"}), 400
+
+    ticker_dir = RAW_DIR / ticker
+    ticker_dir.mkdir(parents=True, exist_ok=True)
+
+    uploaded = []
+    for f in files:
+        if not f.filename or not f.filename.lower().endswith(".pdf"):
+            continue
+        filename = secure_filename(f.filename)
+        save_path = ticker_dir / filename
+        f.save(str(save_path))
+
+        # Register in DB
+        rel_path = str(save_path.relative_to(Path(__file__).resolve().parent))
+        doc_id = hashlib.sha256(rel_path.encode()).hexdigest()[:16]
+        header = filename.replace(".pdf", "").replace("-", " ").replace("_", " ")
+        doc_type = classify_title(header)
+
+        conn = get_connection()
+        conn.execute(
+            "INSERT OR IGNORE INTO companies (ticker, updated_at) VALUES (?, CURRENT_TIMESTAMP)",
+            (ticker,),
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO documents
+               (id, company_ticker, doc_type, header, announcement_date, url, local_path, parse_status)
+               VALUES (?, ?, ?, ?, NULL, '', ?, 'pending')""",
+            (doc_id, ticker, doc_type, header, rel_path),
+        )
+        conn.commit()
+        conn.close()
+
+        uploaded.append({"filename": filename, "doc_id": doc_id, "doc_type": doc_type})
+
+    if not uploaded:
+        return jsonify({"error": "No valid PDF files"}), 400
+
+    # Run pipeline in background for this ticker
+    def run_parse():
+        from parse import run_pipeline
+        run_pipeline(ticker)
+
+    thread = threading.Thread(target=run_parse)
+    thread.start()
+
+    return jsonify({
+        "status": "processing",
+        "ticker": ticker,
+        "files": uploaded,
+    })
 
 
 @app.route("/api/parse", methods=["POST"])

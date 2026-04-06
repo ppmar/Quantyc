@@ -13,7 +13,9 @@ import {
   FlaskConical,
   Crosshair,
   AlertTriangle,
+  Upload,
 } from "lucide-react";
+import { UploadZone } from "@/components/upload-zone";
 import {
   BarChart,
   Bar,
@@ -41,13 +43,19 @@ export default function DashboardPage() {
     red_flags: [],
   });
 
-  useEffect(() => {
+  const [showUpload, setShowUpload] = useState(false);
+
+  const refreshData = () => {
     api.stats().then(setStats).catch(() => {});
     api.companies().then(setCompanies).catch(() => {});
     api
       .review()
       .then((d) => setReview({ red_flags: d.red_flags }))
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshData();
   }, []);
 
   if (!stats) {
@@ -72,6 +80,28 @@ export default function DashboardPage() {
           Pipeline overview and data coverage
         </p>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-1.5">
+              <Upload className="h-4 w-4" />
+              Upload Documents
+            </CardTitle>
+            <button
+              onClick={() => setShowUpload(!showUpload)}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showUpload ? "Hide" : "Show"}
+            </button>
+          </div>
+        </CardHeader>
+        {showUpload && (
+          <CardContent>
+            <UploadZone onComplete={refreshData} />
+          </CardContent>
+        )}
+      </Card>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard label="Companies" value={stats.companies} icon={Building2} />

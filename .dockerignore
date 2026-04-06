@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+data/raw/
+data/staging.db
+.env
+frontend/
+node_modules/
+.next/
+output/
+*.png
+CLAUDE.md
+AGENTS.md

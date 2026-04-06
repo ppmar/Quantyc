@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header -->
+    <div>
+        <h1 class="text-2xl font-bold text-white">Pipeline Dashboard</h1>
+        <p class="text-sm text-gray-400 mt-1">Overview of the ASX junior miner data pipeline</p>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        {% set cards = [
+            ("Companies", stats.companies, "text-blue-400"),
+            ("Documents", stats.documents, "text-indigo-400"),
+            ("Parsed", stats.docs_done, "text-green-400"),
+            ("Pending", stats.docs_pending, "text-yellow-400"),
+            ("Failed", stats.docs_failed, "text-red-400"),
+            ("Staging Rows", stats.staging_rows, "text-purple-400"),
+            ("Resources", stats.resources, "text-emerald-400"),
+            ("Financials", stats.financials, "text-cyan-400"),
+            ("Studies", stats.studies, "text-orange-400"),
+            ("Drill Holes", stats.drill_holes, "text-pink-400"),
+            ("Intercepts", stats.drill_intercepts, "text-rose-400"),
+            ("Needs Review", stats.needs_review, "text-amber-400"),
+        ] %}
+        {% for label, value, color in cards %}
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <div class="text-xs text-gray-500 uppercase tracking-wide">{{ label }}</div>
+            <div class="text-2xl font-bold {{ color }} mt-1 mono">{{ value }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Charts row -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Documents by type -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+            <h3 class="text-sm font-semibold text-gray-300 mb-4">Documents by Type</h3>
+            <canvas id="docTypeChart" height="200"></canvas>
+        </div>
+        <!-- Parse status -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+            <h3 class="text-sm font-semibold text-gray-300 mb-4">Parse Status</h3>
+            <canvas id="parseStatusChart" height="200"></canvas>
+        </div>
+    </div>
+
+    <!-- Red flags -->
+    {% if red_flags %}
+    <div class="bg-red-950/50 border border-red-900/50 rounded-lg p-5">
+        <h3 class="text-sm font-semibold text-red-400 mb-3">Red Flags ({{ red_flags|length }})</h3>
+        <div class="space-y-2">
+            {% for flag in red_flags %}
+            <div class="flex items-start space-x-3 text-sm">
+                <span class="bg-red-900/50 text-red-300 px-2 py-0.5 rounded text-xs font-medium mono whitespace-nowrap">{{ flag.ticker }}</span>
+                <span class="text-gray-300">{{ flag.description }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Recent documents -->
+    <div class="bg-gray-900 border border-gray-800 rounded-lg p-5">
+        <h3 class="text-sm font-semibold text-gray-300 mb-4">Recent Documents</h3>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-gray-500 border-b border-gray-800">
+                        <th class="pb-2 pr-4">Ticker</th>
+                        <th class="pb-2 pr-4">Type</th>
+                        <th class="pb-2 pr-4">Header</th>
+                        <th class="pb-2 pr-4">Status</th>
+                        <th class="pb-2">Date</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/50">
+                    {% for doc in recent_docs %}
+                    <tr class="hover:bg-gray-800/30">
+                        <td class="py-2 pr-4">
+                            <a href="/company/{{ doc.company_ticker }}" class="text-gold-400 hover:text-gold-300 font-medium mono">{{ doc.company_ticker }}</a>
+                        </td>
+                        <td class="py-2 pr-4">
+                            <span class="bg-gray-800 text-gray-300 px-2 py-0.5 rounded text-xs">{{ doc.doc_type }}</span>
+                        </td>
+                        <td class="py-2 pr-4 text-gray-300 max-w-xs truncate">{{ doc.header or '-' }}</td>
+                        <td class="py-2 pr-4">
+                            {% if doc.parse_status == 'done' %}
+                            <span class="text-green-400 text-xs font-medium">done</span>
+                            {% elif doc.parse_status == 'pending' %}
+                            <span class="text-yellow-400 text-xs font-medium">pending</span>
+                            {% elif doc.parse_status == 'failed' %}
+                            <span class="text-red-400 text-xs font-medium">failed</span>
+                            {% else %}
+                            <span class="text-gray-500 text-xs">{{ doc.parse_status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-2 text-gray-500 mono text-xs">{{ doc.announcement_date or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Documents by type chart
+    const typeData = {{ docs_by_type|tojson }};
+    new Chart(document.getElementById('docTypeChart'), {
+        type: 'bar',
+        data: {
+            labels: typeData.map(d => d.doc_type),
+            datasets: [{
+                data: typeData.map(d => d.n),
+                backgroundColor: ['#3b82f6', '#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#06b6d4', '#6b7280'],
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { ticks: { color: '#9ca3af', font: { size: 11 } }, grid: { display: false } },
+                y: { ticks: { color: '#9ca3af', stepSize: 1 }, grid: { color: '#1f2937' } }
+            }
+        }
+    });
+
+    // Parse status chart
+    const statusData = {{ docs_by_status|tojson }};
+    const statusColors = { done: '#10b981', pending: '#f59e0b', failed: '#ef4444', needs_review: '#3b82f6' };
+    new Chart(document.getElementById('parseStatusChart'), {
+        type: 'doughnut',
+        data: {
+            labels: statusData.map(d => d.parse_status),
+            datasets: [{
+                data: statusData.map(d => d.n),
+                backgroundColor: statusData.map(d => statusColors[d.parse_status] || '#6b7280'),
+                borderWidth: 0,
+            }]
+        },
+        options: {
+            responsive: true,
+            cutout: '60%',
+            plugins: {
+                legend: { position: 'bottom', labels: { color: '#9ca3af', padding: 16, font: { size: 12 } } }
+            }
+        }
+    });
+</script>
+{% endblock %}

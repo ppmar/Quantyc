@@ -1,0 +1,9 @@
+data/raw/
+data/staging.db
+.env
+__pycache__/
+*.pyc
+.venv/
+output/
+*.png
+node_modules/

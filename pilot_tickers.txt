@@ -1,0 +1,20 @@
+# ASX Junior Gold Miners — Pilot List
+# Mix of stages: concept, discovery, feasibility, near-production
+
+# Concept / Early Explorer
+WMX
+MAU
+
+# Discovery / Resource Growth
+DEG
+RMS
+DCN
+
+# PFS/DFS Stage
+BGL
+GOR
+RED
+
+# Near-Producer / Production
+RRL
+CMM

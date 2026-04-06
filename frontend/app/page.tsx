@@ -16,6 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import { UploadZone } from "@/components/upload-zone";
+import { PipelineProgress } from "@/components/pipeline-progress";
 import {
   BarChart,
   Bar,
@@ -102,6 +103,8 @@ export default function DashboardPage() {
           </CardContent>
         )}
       </Card>
+
+      <PipelineProgress onComplete={refreshData} />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard label="Companies" value={stats.companies} icon={Building2} />

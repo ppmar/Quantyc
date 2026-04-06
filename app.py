@@ -12,6 +12,7 @@ import hashlib
 import logging
 import os
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -21,6 +22,18 @@ from werkzeug.utils import secure_filename
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Pipeline progress tracking
+pipeline_status = {
+    "running": False,
+    "ticker": None,
+    "phase": None,       # registering | parsing | normalizing | loading | done | error
+    "current_doc": None,
+    "docs_total": 0,
+    "docs_done": 0,
+    "started_at": None,
+    "error": None,
+}
 
 from db import get_connection, init_db
 from pipeline.classifier import classify_title
@@ -231,6 +244,11 @@ def api_drill(ticker):
     return jsonify(rows)
 
 
+@app.route("/api/pipeline/status")
+def api_pipeline_status():
+    return jsonify(pipeline_status)
+
+
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
     """
@@ -288,13 +306,7 @@ def api_upload():
 
     # Run pipeline in background for this ticker
     def run_parse():
-        try:
-            logger.info(f"Starting pipeline for {ticker}")
-            from parse import run_pipeline
-            run_pipeline(ticker)
-            logger.info(f"Pipeline completed for {ticker}")
-        except Exception:
-            logger.error(f"Pipeline failed for {ticker}:\n{traceback.format_exc()}")
+        _run_pipeline_tracked(ticker)
 
     thread = threading.Thread(target=run_parse, daemon=True)
     thread.start()
@@ -311,17 +323,38 @@ def api_parse():
     ticker = request.json.get("ticker") if request.is_json else None
 
     def run_parse():
-        try:
-            logger.info(f"Starting pipeline for {ticker or 'all'}")
-            from parse import run_pipeline
-            run_pipeline(ticker)
-            logger.info(f"Pipeline completed for {ticker or 'all'}")
-        except Exception:
-            logger.error(f"Pipeline failed for {ticker or 'all'}:\n{traceback.format_exc()}")
+        _run_pipeline_tracked(ticker)
 
     thread = threading.Thread(target=run_parse, daemon=True)
     thread.start()
     return jsonify({"status": "started", "ticker": ticker or "all"})
+
+
+def _run_pipeline_tracked(ticker):
+    """Run pipeline with progress tracking."""
+    global pipeline_status
+    pipeline_status = {
+        "running": True,
+        "ticker": ticker or "all",
+        "phase": "registering",
+        "current_doc": None,
+        "docs_total": 0,
+        "docs_done": 0,
+        "started_at": time.time(),
+        "error": None,
+    }
+    try:
+        logger.info(f"Starting pipeline for {ticker or 'all'}")
+        from parse import run_pipeline_tracked
+        run_pipeline_tracked(ticker, pipeline_status)
+        pipeline_status["phase"] = "done"
+        pipeline_status["running"] = False
+        logger.info(f"Pipeline completed for {ticker or 'all'}")
+    except Exception:
+        pipeline_status["phase"] = "error"
+        pipeline_status["error"] = traceback.format_exc().split("\n")[-2]
+        pipeline_status["running"] = False
+        logger.error(f"Pipeline failed for {ticker or 'all'}:\n{traceback.format_exc()}")
 
 
 if __name__ == "__main__":

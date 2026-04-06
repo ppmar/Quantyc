@@ -197,6 +197,91 @@ def run_pipeline(ticker: str | None = None) -> dict:
     return stats
 
 
+def run_pipeline_tracked(ticker: str | None, status: dict) -> dict:
+    """Run the full pipeline, updating status dict for live progress."""
+    init_db()
+
+    # 1. Register
+    status["phase"] = "registering"
+    register_pdfs(ticker)
+
+    # 2. Count pending docs
+    conn = get_connection()
+    where = "WHERE parse_status = 'pending'"
+    params = ()
+    if ticker:
+        where += " AND company_ticker = ?"
+        params = (ticker.upper(),)
+    docs = conn.execute(f"SELECT id, doc_type, header FROM documents {where}", params).fetchall()
+    conn.close()
+
+    status["phase"] = "parsing"
+    status["docs_total"] = len(docs)
+    status["docs_done"] = 0
+
+    for doc in docs:
+        doc_id = doc["id"]
+        doc_type = doc["doc_type"]
+        status["current_doc"] = doc["header"] or doc_id
+        parser = PARSERS.get(doc_type)
+
+        # Try to reclassify 'other' docs from PDF content
+        if not parser and doc_type == "other":
+            doc_type = _classify_from_content(doc_id)
+            if doc_type != "other":
+                conn2 = get_connection()
+                conn2.execute("UPDATE documents SET doc_type = ? WHERE id = ?", (doc_type, doc_id))
+                conn2.commit()
+                conn2.close()
+                parser = PARSERS.get(doc_type)
+                logger.info("Reclassified %s as '%s' from PDF content", doc_id, doc_type)
+
+        if not parser:
+            logger.info("No parser for doc_type '%s' — marking needs_review %s", doc_type, doc_id)
+            conn2 = get_connection()
+            conn2.execute("UPDATE documents SET parse_status = 'needs_review' WHERE id = ?", (doc_id,))
+            conn2.commit()
+            conn2.close()
+            status["docs_done"] += 1
+            continue
+
+        logger.info("Parsing [%s] %s: %s", doc_type, doc_id, doc["header"])
+        try:
+            parser(doc_id)
+        except Exception as e:
+            logger.error("Parser error on %s: %s", doc_id, e)
+        status["docs_done"] += 1
+
+    # 3. Normalize
+    status["phase"] = "normalizing"
+    status["current_doc"] = None
+    conn = get_connection()
+    parsed_docs = conn.execute(
+        "SELECT DISTINCT document_id FROM staging_extractions WHERE normalized_value IS NULL"
+    ).fetchall()
+    conn.close()
+    for row in parsed_docs:
+        normalize_document_extractions(row["document_id"])
+
+    # 4. Load
+    status["phase"] = "loading"
+    conn = get_connection()
+    where = "WHERE parse_status = 'done'"
+    params = ()
+    if ticker:
+        where += " AND company_ticker = ?"
+        params = (ticker.upper(),)
+    done_docs = conn.execute(f"SELECT id FROM documents {where}", params).fetchall()
+    conn.close()
+    for row in done_docs:
+        try:
+            load_document(row["id"])
+        except Exception as e:
+            logger.error("Loader error on %s: %s", row["id"], e)
+
+    return {}
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="One-command pipeline: register, parse, normalize, load, visualize"

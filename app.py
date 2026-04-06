@@ -236,12 +236,15 @@ def api_upload():
     """
     Upload PDFs for a ticker. Accepts multipart form data with:
     - ticker: company ticker (required)
+    - doc_type: override document type (optional, e.g. appendix_5b, resource_update, study)
     - files: one or more PDF files
     Auto-registers, classifies, parses, normalizes, and loads each file.
     """
     ticker = request.form.get("ticker", "").strip().upper()
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
+
+    override_doc_type = request.form.get("doc_type", "").strip()
 
     files = request.files.getlist("files")
     if not files:
@@ -262,7 +265,7 @@ def api_upload():
         rel_path = str(save_path.relative_to(Path(__file__).resolve().parent))
         doc_id = hashlib.sha256(rel_path.encode()).hexdigest()[:16]
         header = filename.replace(".pdf", "").replace("-", " ").replace("_", " ")
-        doc_type = classify_title(header)
+        doc_type = override_doc_type if override_doc_type else classify_title(header)
 
         conn = get_connection()
         conn.execute(

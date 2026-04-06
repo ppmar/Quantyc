@@ -4,6 +4,17 @@ import { useState, useCallback, useRef } from "react";
 import { Upload, FileText, CheckCircle2, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const DOC_TYPES = [
+  { value: "auto", label: "Auto-detect" },
+  { value: "appendix_5b", label: "Appendix 5B" },
+  { value: "resource_update", label: "Resource / Reserve Update" },
+  { value: "drill_results", label: "Drill Results" },
+  { value: "study", label: "Study (Scoping / PFS / DFS)" },
+  { value: "capital_raise", label: "Capital Raise" },
+  { value: "quarterly_report", label: "Quarterly Report" },
+  { value: "annual_report", label: "Annual Report" },
+];
+
 interface UploadResult {
   filename: string;
   doc_id: string;
@@ -17,6 +28,7 @@ interface UploadZoneProps {
 export function UploadZone({ onComplete }: UploadZoneProps) {
   const [dragOver, setDragOver] = useState(false);
   const [ticker, setTicker] = useState("");
+  const [docType, setDocType] = useState("auto");
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState<UploadResult[] | null>(null);
@@ -51,6 +63,7 @@ export function UploadZone({ onComplete }: UploadZoneProps) {
 
     const formData = new FormData();
     formData.append("ticker", ticker.trim().toUpperCase());
+    if (docType !== "auto") formData.append("doc_type", docType);
     files.forEach((f) => formData.append("files", f));
 
     try {
@@ -75,18 +88,38 @@ export function UploadZone({ onComplete }: UploadZoneProps) {
 
   return (
     <div className="space-y-4">
-      {/* Ticker input */}
-      <div>
-        <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Company Ticker
-        </label>
-        <input
-          type="text"
-          value={ticker}
-          onChange={(e) => setTicker(e.target.value.toUpperCase())}
-          placeholder="e.g. DEG, SXG, BGL"
-          className="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50"
-        />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {/* Ticker input */}
+        <div>
+          <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Company Ticker
+          </label>
+          <input
+            type="text"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value.toUpperCase())}
+            placeholder="e.g. DEG, SXG, BGL"
+            className="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm font-mono text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        {/* Doc type selector */}
+        <div>
+          <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Document Type
+          </label>
+          <select
+            value={docType}
+            onChange={(e) => setDocType(e.target.value)}
+            className="mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+          >
+            {DOC_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Drop zone */}

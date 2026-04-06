@@ -37,6 +37,31 @@ PARSERS = {
 }
 
 
+def _classify_from_content(doc_id: str) -> str:
+    """Try to classify a document by reading the first page of the PDF."""
+    conn = get_connection()
+    row = conn.execute("SELECT local_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    conn.close()
+    if not row or not row["local_path"]:
+        return "other"
+
+    pdf_path = Path(__file__).resolve().parent / row["local_path"]
+    if not pdf_path.exists():
+        return "other"
+
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            text = ""
+            for page in pdf.pages[:3]:
+                text += (page.extract_text() or "") + "\n"
+        doc_type = classify_title(text)
+        return doc_type
+    except Exception as e:
+        logger.warning("Could not read PDF for classification %s: %s", doc_id, e)
+        return "other"
+
+
 def register_pdfs(ticker: str | None = None) -> int:
     """Scan data/raw/ for unregistered PDFs and add them to the documents table."""
     conn = get_connection()
@@ -105,6 +130,17 @@ def run_pipeline(ticker: str | None = None) -> dict:
         doc_id = doc["id"]
         doc_type = doc["doc_type"]
         parser = PARSERS.get(doc_type)
+
+        # Try to reclassify 'other' docs from PDF content
+        if not parser and doc_type == "other":
+            doc_type = _classify_from_content(doc_id)
+            if doc_type != "other":
+                conn2 = get_connection()
+                conn2.execute("UPDATE documents SET doc_type = ? WHERE id = ?", (doc_type, doc_id))
+                conn2.commit()
+                conn2.close()
+                parser = PARSERS.get(doc_type)
+                logger.info("Reclassified %s as '%s' from PDF content", doc_id, doc_type)
 
         if not parser:
             logger.info("No parser for doc_type '%s' — skipping %s", doc_type, doc_id)

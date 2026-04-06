@@ -229,9 +229,9 @@ export default function CompanyPage({
                 <div className="h-[250px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={resourceChartData} margin={{ top: 8, right: 8, bottom: 0, left: -8 }}>
-                      <XAxis dataKey="label" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "13px" }} />
+                      <XAxis dataKey="label" tick={{ fill: "#a3a3a3", fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: "#a3a3a3", fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "13px", color: "#e5e5e5" }} />
                       <Bar dataKey="contained" radius={[4, 4, 0, 0]}>
                         {resourceChartData.map((entry, i) => (
                           <Cell key={i} fill={entry.fill} />
@@ -290,10 +290,10 @@ export default function CompanyPage({
                 <div className="h-[400px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={drillChartData} layout="vertical" margin={{ top: 8, right: 16, bottom: 0, left: 120 }}>
-                      <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis dataKey="label" type="category" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} axisLine={false} tickLine={false} width={120} />
-                      <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "13px" }} />
-                      <Bar dataKey="gm" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                      <XAxis type="number" tick={{ fill: "#a3a3a3", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis dataKey="label" type="category" tick={{ fill: "#a3a3a3", fontSize: 10 }} axisLine={false} tickLine={false} width={120} />
+                      <Tooltip contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: "13px", color: "#e5e5e5" }} />
+                      <Bar dataKey="gm" fill="#eab308" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

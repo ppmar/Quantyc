@@ -285,10 +285,12 @@ def run_pipeline_tracked(ticker: str | None, status: dict) -> dict:
 
         logger.info("Parsing [%s] %s: %s", doc_type, doc_id, doc["header"])
         try:
-            parser(doc_id)
+            result = parser(doc_id)
+            if not result:
+                status["failed_count"] = status.get("failed_count", 0) + 1
         except Exception as e:
             logger.error("Parser error on %s: %s", doc_id, e)
-            # Ensure parse_status is updated even on exception
+            status["failed_count"] = status.get("failed_count", 0) + 1
             conn2 = get_connection()
             conn2.execute("UPDATE documents SET parse_status = 'failed' WHERE id = ?", (doc_id,))
             conn2.commit()

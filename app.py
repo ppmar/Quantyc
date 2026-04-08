@@ -325,11 +325,7 @@ def api_upload():
         }), 409
 
     # Run pipeline in background for this ticker
-    def run_parse():
-        _run_pipeline_tracked(ticker)
-
-    thread = threading.Thread(target=run_parse, daemon=True)
-    thread.start()
+    _start_pipeline(ticker)
 
     response = {
         "status": "processing",
@@ -344,17 +340,12 @@ def api_upload():
 @app.route("/api/parse", methods=["POST"])
 def api_parse():
     ticker = request.json.get("ticker") if request.is_json else None
-
-    def run_parse():
-        _run_pipeline_tracked(ticker)
-
-    thread = threading.Thread(target=run_parse, daemon=True)
-    thread.start()
+    _start_pipeline(ticker)
     return jsonify({"status": "started", "ticker": ticker or "all"})
 
 
-def _run_pipeline_tracked(ticker):
-    """Run pipeline with progress tracking."""
+def _start_pipeline(ticker):
+    """Reset status immediately (before thread starts) and launch pipeline."""
     global pipeline_status
     pipeline_status = {
         "running": True,
@@ -365,20 +356,24 @@ def _run_pipeline_tracked(ticker):
         "docs_done": 0,
         "started_at": time.time(),
         "error": None,
+        "failed_count": 0,
     }
+
+    def run_parse():
+        _run_pipeline_tracked(ticker)
+
+    thread = threading.Thread(target=run_parse, daemon=True)
+    thread.start()
+
+
+def _run_pipeline_tracked(ticker):
+    """Run pipeline with progress tracking."""
+    global pipeline_status
     try:
         logger.info(f"Starting pipeline for {ticker or 'all'}")
         from parse import run_pipeline_tracked
         run_pipeline_tracked(ticker, pipeline_status)
-        # Check if any documents actually failed
-        conn = get_connection()
-        failed_count = conn.execute(
-            "SELECT COUNT(*) as n FROM documents WHERE parse_status = 'failed'"
-            + (" AND company_ticker = ?" if ticker else ""),
-            (ticker.upper(),) if ticker else (),
-        ).fetchone()["n"]
-        conn.close()
-        pipeline_status["failed_count"] = failed_count
+        failed_count = pipeline_status.get("failed_count", 0)
         pipeline_status["phase"] = "done_with_errors" if failed_count > 0 else "done"
         pipeline_status["running"] = False
         logger.info(f"Pipeline completed for {ticker or 'all'} (failures: {failed_count})")

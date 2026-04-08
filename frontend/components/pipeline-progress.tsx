@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,28 +26,40 @@ const PHASE_LABELS: Record<string, string> = {
   error: "Error",
 };
 
+const TERMINAL_PHASES = new Set(["done", "done_with_errors", "error"]);
+
 export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [visible, setVisible] = useState(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didFinishRef = useRef(false);
 
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-
     const poll = async () => {
       try {
         const res = await fetch("/api/pipeline/status");
         const data: PipelineStatus = await res.json();
         setStatus(data);
 
-        if (data.running || data.phase === "done" || data.phase === "done_with_errors" || data.phase === "error") {
+        if (data.running) {
+          // Pipeline is active — show and reset finish flag
           setVisible(true);
-        }
-
-        if (!data.running && (data.phase === "done" || data.phase === "done_with_errors" || data.phase === "error")) {
-          // Keep visible for 5s after completion, then hide
-          setTimeout(() => {
+          didFinishRef.current = false;
+          if (hideTimerRef.current) {
+            clearTimeout(hideTimerRef.current);
+            hideTimerRef.current = null;
+          }
+        } else if (data.phase && TERMINAL_PHASES.has(data.phase) && !didFinishRef.current) {
+          // Just finished — show result, schedule hide once
+          didFinishRef.current = true;
+          setVisible(true);
+          if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+          hideTimerRef.current = setTimeout(() => {
             setVisible(false);
-            onComplete?.();
+            onCompleteRef.current?.();
+            hideTimerRef.current = null;
           }, 5000);
         }
       } catch {
@@ -56,11 +68,14 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
     };
 
     poll();
-    interval = setInterval(poll, 1500);
-    return () => clearInterval(interval);
-  }, [onComplete]);
+    const interval = setInterval(poll, 1500);
+    return () => {
+      clearInterval(interval);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, []); // no deps — refs handle callbacks
 
-  if (!visible || !status || (!status.running && !status.phase)) return null;
+  if (!visible || !status) return null;
 
   const pct =
     status.docs_total > 0
@@ -100,8 +115,8 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
         </span>
       </div>
 
-      {/* Progress bar */}
-      {status.phase === "parsing" && status.docs_total > 0 && (
+      {/* Progress bar — show during parsing and all later active phases */}
+      {status.running && status.docs_total > 0 && (
         <div className="space-y-1.5">
           <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
             <div
@@ -123,7 +138,7 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
         </div>
       )}
 
-      {isDoneWithErrors && status.failed_count && (
+      {isDoneWithErrors && status.failed_count != null && status.failed_count > 0 && (
         <p className="text-xs text-amber-400">
           {status.failed_count} document{status.failed_count > 1 ? "s" : ""} failed to parse
         </p>

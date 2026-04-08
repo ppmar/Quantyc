@@ -27,33 +27,39 @@ from pipeline.parsers.resource import parse_resource
 from pipeline.parsers.drill_results import parse_drill_results
 from pipeline.parsers.capital_raise import parse_capital_raise
 from pipeline.parsers.study import parse_study
+from pipeline.parsers.generic import parse_generic
 
 logger = logging.getLogger(__name__)
 
-RELEVANT_KEYWORDS = [
-    "appendix 5b", "quarterly", "resource", "reserve", "scoping study",
-    "pre-feasibility", "prefeasibility", "feasibility", "drilling", "drill",
-    "assay", "mineralisation", "mineral resource", "ore reserve",
-    "updated resource", "capital raise", "placement", "entitlement",
-    "g/t", "intercept",
+# Skip these — purely administrative filings with no extractable data
+SKIP_KEYWORDS = [
+    "cessation of securities", "change of director", "cleansing notice",
+    "appendix 2a", "appendix 3b", "appendix 3y", "appendix 3z",
+    "s708a notice", "statement of cdis", "becoming a substantial",
+    "ceasing to be a substantial", "notification of buy-back",
+    "dividend/distribution", "notification regarding unquoted",
+    "daily share buy-back", "date of agm", "proxy form",
+    "letter to shareholders",
 ]
 
 PARSERS = {
     "appendix_5b":      parse_appendix_5b,
-    "quarterly_report": parse_appendix_5b,
+    "quarterly_report": parse_generic,  # LLM-based, handles all quarterly formats
     "resource_update":  parse_resource,
     "drill_results":    parse_drill_results,
     "capital_raise":    parse_capital_raise,
     "study":            parse_study,
+    "annual_report":    parse_generic,
+    "other":            parse_generic,
 }
 
 FETCH_DELAY = 0.5
 
 
-def _is_relevant(header: str) -> bool:
-    """Check if an announcement header matches relevant keywords."""
+def _should_skip(header: str) -> bool:
+    """Check if an announcement is purely administrative and should be skipped."""
     h = header.lower()
-    return any(kw in h for kw in RELEVANT_KEYWORDS)
+    return any(kw in h for kw in SKIP_KEYWORDS)
 
 
 def _fetch_pdf_bytes(url: str) -> bytes | None:
@@ -98,7 +104,7 @@ def ingest_ticker(ticker: str, count: int = 50, status: dict | None = None) -> d
     for ann in announcements:
         header = ann.get("header", "")
         full_url = ann.get("url")
-        if not full_url or not _is_relevant(header):
+        if not full_url or _should_skip(header):
             continue
 
         doc_id = doc_id_from_url(full_url)

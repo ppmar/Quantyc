@@ -130,16 +130,17 @@ def _is_jorc_table(table: list[list]) -> bool:
     return score >= 2
 
 
-def extract_from_tables(pdf_path: str) -> list[dict]:
+def extract_from_tables(pdf_source) -> list[dict]:
     """
     Try to extract resource/reserve rows from JORC tables in the PDF.
+    Accepts a file path (str/Path) or in-memory BytesIO.
     Returns list of dicts with resource fields, or empty list if no tables found.
     """
     results = []
     try:
-        pdf = pdfplumber.open(pdf_path)
+        pdf = pdfplumber.open(pdf_source)
     except Exception as e:
-        logger.error("Failed to open PDF %s: %s", pdf_path, e)
+        logger.error("Failed to open PDF: %s", e)
         return results
 
     for page_num, page in enumerate(pdf.pages):
@@ -151,7 +152,7 @@ def extract_from_tables(pdf_path: str) -> list[dict]:
             if not _is_jorc_table(table):
                 continue
 
-            logger.info("Found JORC table on page %d of %s", page_num + 1, pdf_path)
+            logger.info("Found JORC table on page %d", page_num + 1)
 
             # Try to detect commodity from the page text
             page_text = page.extract_text() or ""
@@ -222,14 +223,15 @@ def _estimate_type_from_category(category: str) -> str:
     return "resource"
 
 
-def extract_with_llm_fallback(pdf_path: str) -> list[dict]:
+def extract_with_llm_fallback(pdf_source) -> list[dict]:
     """
     Use LLM to extract resource data from the most relevant pages.
+    Accepts a file path (str/Path) or in-memory BytesIO.
     Called when table extraction fails or finds nothing.
     """
-    pages = find_relevant_pages(pdf_path, "resource", max_pages=3)
+    pages = find_relevant_pages(pdf_source, "resource", max_pages=3)
     if not pages:
-        logger.warning("No resource-relevant pages found in %s", pdf_path)
+        logger.warning("No resource-relevant pages found")
         return []
 
     # Use the multi-row schema
@@ -269,9 +271,10 @@ def extract_with_llm_fallback(pdf_path: str) -> list[dict]:
     return extracted
 
 
-def parse_resource(doc_id: str) -> list[dict]:
+def parse_resource(doc_id: str, pdf_source=None) -> list[dict]:
     """
     Parse a resource/reserve document and write results to staging_extractions.
+    If pdf_source (BytesIO) is provided, use it instead of local_path from DB.
     Tries table extraction first, falls back to LLM.
     Returns list of extracted resource rows.
     """
@@ -286,22 +289,24 @@ def parse_resource(doc_id: str) -> list[dict]:
         conn.close()
         return []
 
-    local_path = row["local_path"]
-    if not local_path:
-        logger.error("No local_path for document %s", doc_id)
-        conn.close()
-        return []
+    if pdf_source is None:
+        local_path = row["local_path"]
+        if not local_path:
+            logger.error("No local_path for document %s", doc_id)
+            conn.close()
+            return []
+        pdf_source = local_path
 
-    logger.info("Parsing resource document: %s", local_path)
+    logger.info("Parsing resource document: %s", doc_id)
 
     # Try table extraction first
-    results = extract_from_tables(local_path)
+    results = extract_from_tables(pdf_source)
     method = "rule_based"
     confidence = "high"
 
     if not results:
         logger.info("Table extraction found nothing, trying LLM fallback for %s", doc_id)
-        results = extract_with_llm_fallback(local_path)
+        results = extract_with_llm_fallback(pdf_source)
         method = "llm"
         confidence = "medium"
 

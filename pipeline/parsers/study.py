@@ -71,9 +71,10 @@ def _detect_study_stage(text: str) -> str | None:
     return None
 
 
-def parse_study(doc_id: str) -> dict:
+def parse_study(doc_id: str, pdf_source=None) -> dict:
     """
     Parse a study announcement and write results to staging_extractions.
+    If pdf_source (BytesIO) is provided, use it instead of local_path from DB.
     Returns dict of extracted values.
     """
     conn = get_connection()
@@ -87,17 +88,19 @@ def parse_study(doc_id: str) -> dict:
         conn.close()
         return {}
 
-    local_path = row["local_path"]
-    if not local_path:
-        logger.error("No local_path for document %s", doc_id)
-        conn.close()
-        return {}
+    if pdf_source is None:
+        local_path = row["local_path"]
+        if not local_path:
+            logger.error("No local_path for document %s", doc_id)
+            conn.close()
+            return {}
+        pdf_source = local_path
 
-    logger.info("Parsing study document: %s", local_path)
+    logger.info("Parsing study document: %s", doc_id)
 
     # Find relevant pages — studies need NPV, capex, and study keywords
     pages = find_relevant_pages_multi(
-        local_path,
+        pdf_source,
         section_types=["npv", "capex", "study"],
         max_pages=3,
     )
@@ -105,7 +108,7 @@ def parse_study(doc_id: str) -> dict:
     if not pages:
         # Fallback: just use the first 3 pages (many studies have a summary upfront)
         logger.info("No high-scoring pages found, using first pages of %s", doc_id)
-        all_pages = extract_page_texts(local_path)
+        all_pages = extract_page_texts(pdf_source)
         pages = all_pages[:3] if all_pages else []
 
     if not pages:

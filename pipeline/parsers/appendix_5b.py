@@ -73,18 +73,19 @@ def _match_row_label(cell_text: str, patterns: list[str]) -> bool:
     return any(p in cell_lower for p in patterns)
 
 
-def extract_from_tables(pdf_path: str) -> dict[str, float | None]:
+def extract_from_tables(pdf_source) -> dict[str, float | None]:
     """
     Extract cash flow fields from Appendix 5B tables.
     Returns dict with keys: cash_at_end_quarter, operating_cashflow, investing_cashflow.
     Values are in A$'000 as reported (the standard unit in Appendix 5B).
+    Accepts a file path (str/Path) or in-memory BytesIO.
     """
     results = {field: None for field in ROW_PATTERNS}
 
     try:
-        pdf = pdfplumber.open(pdf_path)
+        pdf = pdfplumber.open(pdf_source)
     except Exception as e:
-        logger.error("Failed to open PDF %s: %s", pdf_path, e)
+        logger.error("Failed to open PDF: %s", e)
         return results
 
     for page in pdf.pages:
@@ -117,9 +118,10 @@ def extract_from_tables(pdf_path: str) -> dict[str, float | None]:
     return results
 
 
-def parse_appendix_5b(doc_id: str) -> dict[str, float | None]:
+def parse_appendix_5b(doc_id: str, pdf_source=None) -> dict[str, float | None]:
     """
     Parse an Appendix 5B document and write results to staging_extractions.
+    If pdf_source (BytesIO) is provided, use it instead of local_path from DB.
     Returns the extracted values.
     """
     conn = get_connection()
@@ -133,14 +135,16 @@ def parse_appendix_5b(doc_id: str) -> dict[str, float | None]:
         conn.close()
         return {}
 
-    local_path = row["local_path"]
-    if not local_path:
-        logger.error("No local_path for document %s", doc_id)
-        conn.close()
-        return {}
+    if pdf_source is None:
+        local_path = row["local_path"]
+        if not local_path:
+            logger.error("No local_path for document %s", doc_id)
+            conn.close()
+            return {}
+        pdf_source = local_path
 
-    logger.info("Parsing Appendix 5B: %s", local_path)
-    results = extract_from_tables(local_path)
+    logger.info("Parsing Appendix 5B: %s", doc_id)
+    results = extract_from_tables(pdf_source)
 
     # Write to staging
     for field, value in results.items():

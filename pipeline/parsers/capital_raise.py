@@ -107,15 +107,14 @@ def extract_with_regex(text: str) -> dict[str, float | str | None]:
     return results
 
 
-def extract_with_llm_fallback(pdf_path: str) -> dict:
-    """Use LLM to extract capital raise data from relevant pages."""
-    pages = find_relevant_pages(pdf_path, "capital_raise", max_pages=3)
+def extract_with_llm_fallback(pdf_source) -> dict:
+    """Use LLM to extract capital raise data from relevant pages.
+    Accepts a file path (str/Path) or in-memory BytesIO."""
+    pages = find_relevant_pages(pdf_source, "capital_raise", max_pages=3)
     if not pages:
-        # If section finder doesn't find capital_raise pages,
-        # try shares section or just first few pages
-        pages = find_relevant_pages(pdf_path, "shares", max_pages=2)
+        pages = find_relevant_pages(pdf_source, "shares", max_pages=2)
     if not pages:
-        all_pages = extract_page_texts(pdf_path)
+        all_pages = extract_page_texts(pdf_source)
         pages = all_pages[:3] if all_pages else []
 
     if not pages:
@@ -125,9 +124,10 @@ def extract_with_llm_fallback(pdf_path: str) -> dict:
     return result or {}
 
 
-def parse_capital_raise(doc_id: str) -> dict:
+def parse_capital_raise(doc_id: str, pdf_source=None) -> dict:
     """
     Parse a capital raise document and write results to staging_extractions.
+    If pdf_source (BytesIO) is provided, use it instead of local_path from DB.
     Tries regex first, falls back to LLM for missing fields.
     Returns dict of extracted values.
     """
@@ -142,16 +142,18 @@ def parse_capital_raise(doc_id: str) -> dict:
         conn.close()
         return {}
 
-    local_path = row["local_path"]
-    if not local_path:
-        logger.error("No local_path for document %s", doc_id)
-        conn.close()
-        return {}
+    if pdf_source is None:
+        local_path = row["local_path"]
+        if not local_path:
+            logger.error("No local_path for document %s", doc_id)
+            conn.close()
+            return {}
+        pdf_source = local_path
 
-    logger.info("Parsing capital raise: %s", local_path)
+    logger.info("Parsing capital raise: %s", doc_id)
 
     # Extract full text for regex pass
-    all_pages = extract_page_texts(local_path)
+    all_pages = extract_page_texts(pdf_source)
     full_text = "\n".join(all_pages)
 
     # Try regex first
@@ -166,7 +168,7 @@ def parse_capital_raise(doc_id: str) -> dict:
     # If we're missing key fields, try LLM
     if found_keys < 2:
         logger.info("Regex found %d/3 key fields, trying LLM for %s", found_keys, doc_id)
-        llm_results = extract_with_llm_fallback(local_path)
+        llm_results = extract_with_llm_fallback(pdf_source)
         if llm_results:
             # Merge: keep regex values where available, fill gaps with LLM
             for field, value in llm_results.items():

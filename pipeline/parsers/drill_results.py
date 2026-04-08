@@ -135,16 +135,17 @@ def _is_collar_table(table: list[list]) -> bool:
     return has_hole and has_coords
 
 
-def extract_collars(pdf_path: str) -> dict[str, dict]:
+def extract_collars(pdf_source) -> dict[str, dict]:
     """
     Extract drill collar data (coordinates, dip, azimuth) from collar tables.
+    Accepts a file path (str/Path) or in-memory BytesIO.
     Returns {hole_id: {prospect, easting, northing, elevation, dip, azimuth}}.
     """
     collars = {}
     try:
-        pdf = pdfplumber.open(pdf_path)
+        pdf = pdfplumber.open(pdf_source)
     except Exception as e:
-        logger.error("Failed to open PDF %s: %s", pdf_path, e)
+        logger.error("Failed to open PDF: %s", e)
         return collars
 
     for page in pdf.pages:
@@ -193,16 +194,17 @@ def extract_collars(pdf_path: str) -> dict[str, dict]:
     return collars
 
 
-def extract_intercepts_from_tables(pdf_path: str) -> list[dict]:
+def extract_intercepts_from_tables(pdf_source) -> list[dict]:
     """
     Extract drill intercepts from tables in the PDF.
+    Accepts a file path (str/Path) or in-memory BytesIO.
     Returns list of intercept dicts.
     """
     results = []
     try:
-        pdf = pdfplumber.open(pdf_path)
+        pdf = pdfplumber.open(pdf_source)
     except Exception as e:
-        logger.error("Failed to open PDF %s: %s", pdf_path, e)
+        logger.error("Failed to open PDF: %s", e)
         return results
 
     for page_num, page in enumerate(pdf.pages):
@@ -219,7 +221,7 @@ def extract_intercepts_from_tables(pdf_path: str) -> list[dict]:
             if not _is_intercept_table(table):
                 continue
 
-            logger.info("Found intercept table on page %d of %s", page_num + 1, pdf_path)
+            logger.info("Found intercept table on page %d", page_num + 1)
 
             # Find header row
             header_idx = 0
@@ -296,16 +298,17 @@ def extract_intercepts_from_tables(pdf_path: str) -> list[dict]:
     return results
 
 
-def extract_intercepts_from_text(pdf_path: str) -> list[dict]:
+def extract_intercepts_from_text(pdf_source) -> list[dict]:
     """
     Fallback: extract inline intercepts from narrative text using regex.
+    Accepts a file path (str/Path) or in-memory BytesIO.
     e.g. "17.3 m @ 22.9 g/t AuEq (15.3 g/t Au, 3.2% Sb) from 251.1 m"
     """
     results = []
     try:
-        pdf = pdfplumber.open(pdf_path)
+        pdf = pdfplumber.open(pdf_source)
     except Exception as e:
-        logger.error("Failed to open PDF %s: %s", pdf_path, e)
+        logger.error("Failed to open PDF: %s", e)
         return results
 
     # More complete pattern for narrative intercepts
@@ -396,9 +399,10 @@ def extract_intercepts_from_text(pdf_path: str) -> list[dict]:
     return results
 
 
-def parse_drill_results(doc_id: str) -> int:
+def parse_drill_results(doc_id: str, pdf_source=None) -> int:
     """
     Parse a drill results document.
+    If pdf_source (BytesIO) is provided, use it instead of local_path from DB.
     Extracts intercepts and collar data, writes to drill_results table.
     Returns number of intercepts loaded.
     """
@@ -413,29 +417,31 @@ def parse_drill_results(doc_id: str) -> int:
         conn.close()
         return 0
 
-    local_path = doc["local_path"]
     ticker = doc["company_ticker"]
     ann_date = doc["announcement_date"]
 
-    if not local_path:
-        logger.error("No local_path for document %s", doc_id)
-        conn.close()
-        return 0
+    if pdf_source is None:
+        local_path = doc["local_path"]
+        if not local_path:
+            logger.error("No local_path for document %s", doc_id)
+            conn.close()
+            return 0
+        pdf_source = local_path
 
-    logger.info("Parsing drill results: %s", local_path)
+    logger.info("Parsing drill results: %s", doc_id)
 
     # Extract collar data first
-    collars = extract_collars(local_path)
+    collars = extract_collars(pdf_source)
     logger.info("Found %d drill collars", len(collars))
 
     # Try table extraction for intercepts
-    intercepts = extract_intercepts_from_tables(local_path)
+    intercepts = extract_intercepts_from_tables(pdf_source)
     method = "rule_based"
     confidence = "high"
 
     if not intercepts:
         logger.info("No intercept tables found, trying text extraction for %s", doc_id)
-        intercepts = extract_intercepts_from_text(local_path)
+        intercepts = extract_intercepts_from_text(pdf_source)
         method = "regex"
         confidence = "medium"
 

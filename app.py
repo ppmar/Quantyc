@@ -372,6 +372,102 @@ def api_cleanup_pdfs():
     return jsonify({"deleted": deleted, "freed_mb": freed_mb})
 
 
+@app.route("/api/ingest", methods=["POST"])
+def api_ingest():
+    """
+    Fetch announcements from ASX API and parse in-memory (no disk writes).
+    Body: { "tickers": ["SXG", "WWI"], "count": 50 }
+    Falls back to pilot_tickers.txt if no tickers provided.
+    """
+    data = request.get_json(silent=True) or {}
+    tickers = data.get("tickers", [])
+    count = data.get("count", 50)
+
+    if not tickers:
+        # Fall back to pilot_tickers.txt
+        pilot_path = Path(__file__).resolve().parent / "pilot_tickers.txt"
+        if pilot_path.exists():
+            tickers = [
+                line.strip() for line in pilot_path.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
+
+    if not tickers:
+        return jsonify({"error": "No tickers provided and no pilot_tickers.txt found"}), 400
+
+    _start_ingest(tickers, count)
+    return jsonify({"status": "started", "tickers": tickers, "count": count})
+
+
+def _start_ingest(tickers, count):
+    """Reset status and launch ingest in background thread."""
+    global pipeline_status
+    pipeline_status = {
+        "running": True,
+        "ticker": ", ".join(t.upper() for t in tickers),
+        "phase": "fetching",
+        "current_doc": None,
+        "docs_total": 0,
+        "docs_done": 0,
+        "started_at": time.time(),
+        "error": None,
+        "failed_count": 0,
+    }
+
+    def run():
+        _run_ingest_tracked(tickers, count)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+
+def _run_ingest_tracked(tickers, count):
+    """Run ASX ingest with progress tracking."""
+    global pipeline_status
+    try:
+        from pipeline.asx_fetcher import ingest_tickers
+        from pipeline.normalizer import normalize_document_extractions
+        from pipeline.loader import load_document
+
+        init_db()
+
+        # Phase 1: Fetch and parse
+        pipeline_status["phase"] = "fetching"
+        ingest_tickers(tickers, count=count, status=pipeline_status)
+
+        # Phase 2: Normalize
+        pipeline_status["phase"] = "normalizing"
+        pipeline_status["current_doc"] = None
+        conn = get_connection()
+        to_normalize = conn.execute(
+            "SELECT DISTINCT document_id FROM staging_extractions WHERE normalized_value IS NULL"
+        ).fetchall()
+        conn.close()
+        for row in to_normalize:
+            normalize_document_extractions(row["document_id"])
+
+        # Phase 3: Load
+        pipeline_status["phase"] = "loading"
+        conn = get_connection()
+        done_docs = conn.execute("SELECT id FROM documents WHERE parse_status = 'done'").fetchall()
+        conn.close()
+        for row in done_docs:
+            try:
+                load_document(row["id"])
+            except Exception as e:
+                logger.error("Loader error on %s: %s", row["id"], e)
+
+        failed_count = pipeline_status.get("failed_count", 0)
+        pipeline_status["phase"] = "done_with_errors" if failed_count > 0 else "done"
+        pipeline_status["running"] = False
+        logger.info(f"Ingest completed (failures: {failed_count})")
+    except Exception:
+        pipeline_status["phase"] = "error"
+        pipeline_status["error"] = traceback.format_exc().split("\n")[-2]
+        pipeline_status["running"] = False
+        logger.error(f"Ingest failed:\n{traceback.format_exc()}")
+
+
 def _start_pipeline(ticker):
     """Reset status immediately (before thread starts) and launch pipeline."""
     global pipeline_status

@@ -3,7 +3,9 @@ data/staging.db
 .env
 CLAUDE.md
 AGENTS.md
+INGEST.md
 claude_git.md
+security_report.md
 __pycache__/
 *.pyc
 .venv/

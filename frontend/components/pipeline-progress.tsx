@@ -18,6 +18,7 @@ interface PipelineStatus {
 
 const PHASE_LABELS: Record<string, string> = {
   registering: "Registering PDFs",
+  fetching: "Fetching from ASX",
   parsing: "Parsing documents",
   normalizing: "Normalizing data",
   loading: "Loading to database",

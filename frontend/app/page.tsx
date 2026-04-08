@@ -16,6 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import { UploadZone } from "@/components/upload-zone";
+import { IngestPanel } from "@/components/ingest-panel";
 import { PipelineProgress } from "@/components/pipeline-progress";
 import {
   BarChart,
@@ -103,6 +104,8 @@ export default function DashboardPage() {
           </CardContent>
         )}
       </Card>
+
+      <IngestPanel />
 
       <PipelineProgress onComplete={refreshData} />
 

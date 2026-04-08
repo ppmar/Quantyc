@@ -156,4 +156,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ticker }),
     }).then((r) => r.json()),
+  ingest: (tickers: string[], count: number = 10) =>
+    fetch(`${API_BASE}/api/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tickers, count }),
+    }).then((r) => r.json()),
 };

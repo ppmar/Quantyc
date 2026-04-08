@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Data directories - will be mounted as volumes
+# Data directory for SQLite DB (PDFs are deleted after parsing)
 RUN mkdir -p data/raw
 
 ENV PORT=8000

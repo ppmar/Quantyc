@@ -26,7 +26,8 @@ from pipeline.loader import load_document
 
 logger = logging.getLogger(__name__)
 
-RAW_DIR = Path(__file__).resolve().parent / "data" / "raw"
+BASE_DIR = Path(__file__).resolve().parent
+RAW_DIR = BASE_DIR / "data" / "raw"
 
 PARSERS = {
     "appendix_5b":      parse_appendix_5b,
@@ -36,6 +37,23 @@ PARSERS = {
     "capital_raise":    parse_capital_raise,
     "study":            parse_study,
 }
+
+
+def _delete_pdf(doc_id: str) -> None:
+    """Delete the PDF file for a document after parsing. Only results are kept."""
+    conn = get_connection()
+    row = conn.execute("SELECT local_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    conn.close()
+    if not row or not row["local_path"]:
+        return
+    pdf_path = BASE_DIR / row["local_path"]
+    if pdf_path.exists():
+        pdf_path.unlink()
+        logger.info("Deleted PDF after parsing: %s", pdf_path.name)
+        # Clean up empty ticker directories
+        parent = pdf_path.parent
+        if parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
 
 
 def _classify_from_content(doc_id: str) -> str:
@@ -79,9 +97,20 @@ def register_pdfs(ticker: str | None = None) -> int:
     for ticker_dir in dirs:
         tk = ticker_dir.name.upper()
         for pdf_path in sorted(ticker_dir.glob("*.pdf")):
-            rel_path = str(pdf_path.relative_to(Path(__file__).resolve().parent))
+            filename = pdf_path.name
+
+            # Skip if this filename was already processed for this ticker
+            existing = conn.execute(
+                "SELECT id FROM documents WHERE company_ticker = ? AND original_filename = ?",
+                (tk, filename),
+            ).fetchone()
+            if existing:
+                continue
+
+            rel_path = str(pdf_path.relative_to(BASE_DIR))
             doc_id = hashlib.sha256(rel_path.encode()).hexdigest()[:16]
 
+            # Also skip by doc_id (backwards compat)
             existing = conn.execute("SELECT id FROM documents WHERE id = ?", (doc_id,)).fetchone()
             if existing:
                 continue
@@ -96,12 +125,12 @@ def register_pdfs(ticker: str | None = None) -> int:
             )
             conn.execute(
                 """INSERT OR IGNORE INTO documents
-                   (id, company_ticker, doc_type, header, announcement_date, url, local_path, parse_status)
-                   VALUES (?, ?, ?, ?, NULL, '', ?, 'pending')""",
-                (doc_id, tk, doc_type, header, rel_path),
+                   (id, company_ticker, doc_type, header, original_filename, announcement_date, url, local_path, parse_status)
+                   VALUES (?, ?, ?, ?, ?, NULL, '', ?, 'pending')""",
+                (doc_id, tk, doc_type, header, filename, rel_path),
             )
             registered += 1
-            logger.info("Registered: %s -> %s (%s)", pdf_path.name, doc_type, doc_id)
+            logger.info("Registered: %s -> %s (%s)", filename, doc_type, doc_id)
 
     conn.commit()
     conn.close()
@@ -150,6 +179,7 @@ def run_pipeline(ticker: str | None = None) -> dict:
             conn2.execute("UPDATE documents SET parse_status = 'needs_review' WHERE id = ?", (doc_id,))
             conn2.commit()
             conn2.close()
+            _delete_pdf(doc_id)
             stats["skipped"] += 1
             continue
 
@@ -163,6 +193,13 @@ def run_pipeline(ticker: str | None = None) -> dict:
         except Exception as e:
             logger.error("Parser error on %s: %s", doc_id, e)
             stats["failed"] += 1
+            # Ensure parse_status is updated even on exception
+            conn2 = get_connection()
+            conn2.execute("UPDATE documents SET parse_status = 'failed' WHERE id = ?", (doc_id,))
+            conn2.commit()
+            conn2.close()
+        finally:
+            _delete_pdf(doc_id)
 
     # 3. Normalize
     conn = get_connection()
@@ -242,6 +279,7 @@ def run_pipeline_tracked(ticker: str | None, status: dict) -> dict:
             conn2.execute("UPDATE documents SET parse_status = 'needs_review' WHERE id = ?", (doc_id,))
             conn2.commit()
             conn2.close()
+            _delete_pdf(doc_id)
             status["docs_done"] += 1
             continue
 
@@ -250,6 +288,13 @@ def run_pipeline_tracked(ticker: str | None, status: dict) -> dict:
             parser(doc_id)
         except Exception as e:
             logger.error("Parser error on %s: %s", doc_id, e)
+            # Ensure parse_status is updated even on exception
+            conn2 = get_connection()
+            conn2.execute("UPDATE documents SET parse_status = 'failed' WHERE id = ?", (doc_id,))
+            conn2.commit()
+            conn2.close()
+        finally:
+            _delete_pdf(doc_id)
         status["docs_done"] += 1
 
     # 3. Normalize

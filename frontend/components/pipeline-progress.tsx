@@ -13,6 +13,7 @@ interface PipelineStatus {
   docs_done: number;
   started_at: number | null;
   error: string | null;
+  failed_count?: number;
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -21,6 +22,7 @@ const PHASE_LABELS: Record<string, string> = {
   normalizing: "Normalizing data",
   loading: "Loading to database",
   done: "Complete",
+  done_with_errors: "Complete with failures",
   error: "Error",
 };
 
@@ -37,11 +39,11 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
         const data: PipelineStatus = await res.json();
         setStatus(data);
 
-        if (data.running || data.phase === "done" || data.phase === "error") {
+        if (data.running || data.phase === "done" || data.phase === "done_with_errors" || data.phase === "error") {
           setVisible(true);
         }
 
-        if (!data.running && (data.phase === "done" || data.phase === "error")) {
+        if (!data.running && (data.phase === "done" || data.phase === "done_with_errors" || data.phase === "error")) {
           // Keep visible for 5s after completion, then hide
           setTimeout(() => {
             setVisible(false);
@@ -66,6 +68,7 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
       : 0;
 
   const isDone = status.phase === "done";
+  const isDoneWithErrors = status.phase === "done_with_errors";
   const isError = status.phase === "error";
 
   return (
@@ -74,6 +77,8 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
         "rounded-lg border p-4 space-y-3 transition-all",
         isDone
           ? "border-green-500/30 bg-green-500/5"
+          : isDoneWithErrors
+          ? "border-amber-500/30 bg-amber-500/5"
           : isError
           ? "border-red-500/30 bg-red-500/5"
           : "border-yellow-500/30 bg-yellow-500/5"
@@ -82,6 +87,8 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
       <div className="flex items-center gap-2">
         {isDone ? (
           <CheckCircle2 className="h-4 w-4 text-green-400" />
+        ) : isDoneWithErrors ? (
+          <AlertCircle className="h-4 w-4 text-amber-400" />
         ) : isError ? (
           <AlertCircle className="h-4 w-4 text-red-400" />
         ) : (
@@ -114,6 +121,12 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
             </p>
           )}
         </div>
+      )}
+
+      {isDoneWithErrors && status.failed_count && (
+        <p className="text-xs text-amber-400">
+          {status.failed_count} document{status.failed_count > 1 ? "s" : ""} failed to parse
+        </p>
       )}
 
       {isError && status.error && (

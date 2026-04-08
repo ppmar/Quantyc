@@ -96,9 +96,15 @@ def collect_ticker(ticker: str, count: int = 20, skip_existing: bool = True) -> 
         full_url = ASX_BASE_URL + pdf_path if pdf_path.startswith("/") else pdf_path
         doc_id = doc_id_from_url(full_url)
 
-        # Skip if already collected
+        # Build filename from URL for dedup
+        original_filename = pdf_path.rstrip("/").split("/")[-1] or f"{doc_id}.pdf"
+
+        # Skip if already collected (by id or by filename)
         if skip_existing:
-            row = conn.execute("SELECT id FROM documents WHERE id = ?", (doc_id,)).fetchone()
+            row = conn.execute(
+                "SELECT id FROM documents WHERE id = ? OR (company_ticker = ? AND original_filename = ?)",
+                (doc_id, ticker, original_filename),
+            ).fetchone()
             if row:
                 continue
 
@@ -116,9 +122,9 @@ def collect_ticker(ticker: str, count: int = 20, skip_existing: bool = True) -> 
         if download_pdf(full_url, local_path):
             conn.execute(
                 """INSERT OR IGNORE INTO documents
-                   (id, company_ticker, doc_type, header, announcement_date, url, local_path, parse_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
-                (doc_id, ticker, doc_type, header, ann_date, full_url, str(local_path)),
+                   (id, company_ticker, doc_type, header, original_filename, announcement_date, url, local_path, parse_status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                (doc_id, ticker, doc_type, header, original_filename, ann_date, full_url, str(local_path)),
             )
             new_count += 1
         else:

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS documents (
     company_ticker  TEXT NOT NULL,
     doc_type        TEXT,               -- appendix_5b | resource_update | drill_results | study | capital_raise | annual_report | quarterly_report | other
     header          TEXT,               -- announcement title from ASX
+    original_filename TEXT,             -- original PDF filename for dedup
     announcement_date DATE,
     url             TEXT,
     local_path      TEXT,

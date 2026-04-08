@@ -272,10 +272,23 @@ def api_upload():
     ticker_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded = []
+    skipped_dupes = []
     for f in files:
         if not f.filename or not f.filename.lower().endswith(".pdf"):
             continue
         filename = secure_filename(f.filename)
+
+        # Check for duplicate by (ticker, filename)
+        conn = get_connection()
+        existing = conn.execute(
+            "SELECT id, parse_status FROM documents WHERE company_ticker = ? AND original_filename = ?",
+            (ticker, filename),
+        ).fetchone()
+        conn.close()
+        if existing:
+            skipped_dupes.append({"filename": filename, "existing_doc_id": existing["id"], "status": existing["parse_status"]})
+            continue
+
         save_path = ticker_dir / filename
         f.save(str(save_path))
 
@@ -292,17 +305,24 @@ def api_upload():
         )
         conn.execute(
             """INSERT OR IGNORE INTO documents
-               (id, company_ticker, doc_type, header, announcement_date, url, local_path, parse_status)
-               VALUES (?, ?, ?, ?, NULL, '', ?, 'pending')""",
-            (doc_id, ticker, doc_type, header, rel_path),
+               (id, company_ticker, doc_type, header, original_filename, announcement_date, url, local_path, parse_status)
+               VALUES (?, ?, ?, ?, ?, NULL, '', ?, 'pending')""",
+            (doc_id, ticker, doc_type, header, filename, rel_path),
         )
         conn.commit()
         conn.close()
 
         uploaded.append({"filename": filename, "doc_id": doc_id, "doc_type": doc_type})
 
-    if not uploaded:
+    if not uploaded and not skipped_dupes:
         return jsonify({"error": "No valid PDF files"}), 400
+
+    if not uploaded and skipped_dupes:
+        return jsonify({
+            "status": "skipped",
+            "message": f"All {len(skipped_dupes)} file(s) already uploaded",
+            "duplicates": skipped_dupes,
+        }), 409
 
     # Run pipeline in background for this ticker
     def run_parse():
@@ -311,11 +331,14 @@ def api_upload():
     thread = threading.Thread(target=run_parse, daemon=True)
     thread.start()
 
-    return jsonify({
+    response = {
         "status": "processing",
         "ticker": ticker,
         "files": uploaded,
-    })
+    }
+    if skipped_dupes:
+        response["duplicates"] = skipped_dupes
+    return jsonify(response)
 
 
 @app.route("/api/parse", methods=["POST"])
@@ -347,9 +370,18 @@ def _run_pipeline_tracked(ticker):
         logger.info(f"Starting pipeline for {ticker or 'all'}")
         from parse import run_pipeline_tracked
         run_pipeline_tracked(ticker, pipeline_status)
-        pipeline_status["phase"] = "done"
+        # Check if any documents actually failed
+        conn = get_connection()
+        failed_count = conn.execute(
+            "SELECT COUNT(*) as n FROM documents WHERE parse_status = 'failed'"
+            + (" AND company_ticker = ?" if ticker else ""),
+            (ticker.upper(),) if ticker else (),
+        ).fetchone()["n"]
+        conn.close()
+        pipeline_status["failed_count"] = failed_count
+        pipeline_status["phase"] = "done_with_errors" if failed_count > 0 else "done"
         pipeline_status["running"] = False
-        logger.info(f"Pipeline completed for {ticker or 'all'}")
+        logger.info(f"Pipeline completed for {ticker or 'all'} (failures: {failed_count})")
     except Exception:
         pipeline_status["phase"] = "error"
         pipeline_status["error"] = traceback.format_exc().split("\n")[-2]

@@ -22,8 +22,8 @@ from pipeline.classifier import classify_title
 
 logger = logging.getLogger(__name__)
 
-ASX_API_URL = "https://www.asx.com.au/asx/1/company/{ticker}/announcements"
-ASX_BASE_URL = "https://www.asx.com.au"
+ASX_API_URL = "https://asx.api.markitdigital.com/asx-research/1.0/companies/{ticker}/announcements"
+ASX_BASE_URL = "https://cdn-api.markitdigital.com/apiman-gateway/ASX/asx-research/1.0/file/"
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
 HEADERS = {
@@ -39,14 +39,30 @@ DELAY_SECONDS = 1.5
 
 
 def fetch_announcements(ticker: str, count: int = 20) -> list[dict]:
-    """Fetch announcement metadata from ASX API for a given ticker."""
+    """Fetch announcement metadata from ASX MarkitDigital API for a given ticker.
+
+    Returns list of dicts with keys: header, url, document_date, announcementType.
+    The url value is the full CDN URL for the PDF.
+    """
     url = ASX_API_URL.format(ticker=ticker.upper())
-    params = {"count": count, "market_sensitive": "false"}
+    params = {"count": count}
     try:
         resp = requests.get(url, params=params, headers=HEADERS, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("data", [])
+        items = data.get("data", {}).get("items", [])
+
+        # Normalise to the format the rest of the pipeline expects
+        results = []
+        for item in items:
+            doc_key = item.get("documentKey", "")
+            results.append({
+                "header": item.get("headline", ""),
+                "url": ASX_BASE_URL + doc_key if doc_key else "",
+                "document_date": (item.get("date") or "")[:10],  # "2026-04-08T06:15:41.000Z" → "2026-04-08"
+                "announcementType": item.get("announcementType", ""),
+            })
+        return results
     except requests.RequestException as e:
         logger.error("Failed to fetch announcements for %s: %s", ticker, e)
         return []
@@ -89,15 +105,14 @@ def collect_ticker(ticker: str, count: int = 20, skip_existing: bool = True) -> 
     new_count = 0
 
     for ann in announcements:
-        pdf_path = ann.get("url")
-        if not pdf_path:
+        full_url = ann.get("url")
+        if not full_url:
             continue
 
-        full_url = ASX_BASE_URL + pdf_path if pdf_path.startswith("/") else pdf_path
         doc_id = doc_id_from_url(full_url)
 
         # Build filename from URL for dedup
-        original_filename = pdf_path.rstrip("/").split("/")[-1] or f"{doc_id}.pdf"
+        original_filename = full_url.rstrip("/").split("/")[-1] or f"{doc_id}.pdf"
 
         # Skip if already collected (by id or by filename)
         if skip_existing:

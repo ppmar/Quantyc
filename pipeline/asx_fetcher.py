@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 
 RELEVANT_KEYWORDS = [
     "appendix 5b", "quarterly", "resource", "reserve", "scoping study",
-    "pre-feasibility", "prefeasibility", "feasibility", "drilling", "assay",
-    "mineralisation", "mineral resource", "ore reserve", "updated resource",
+    "pre-feasibility", "prefeasibility", "feasibility", "drilling", "drill",
+    "assay", "mineralisation", "mineral resource", "ore reserve",
+    "updated resource", "capital raise", "placement", "entitlement",
+    "g/t", "intercept",
 ]
 
 PARSERS = {
@@ -95,11 +97,10 @@ def ingest_ticker(ticker: str, count: int = 50, status: dict | None = None) -> d
     to_process = []
     for ann in announcements:
         header = ann.get("header", "")
-        pdf_path = ann.get("url")
-        if not pdf_path or not _is_relevant(header):
+        full_url = ann.get("url")
+        if not full_url or not _is_relevant(header):
             continue
 
-        full_url = ASX_BASE_URL + pdf_path if pdf_path.startswith("/") else pdf_path
         doc_id = doc_id_from_url(full_url)
 
         # Dedup against DB

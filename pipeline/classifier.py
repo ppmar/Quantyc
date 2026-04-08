@@ -38,7 +38,7 @@ TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
     ("annual_report", ["annual report", "annual financial"]),
     ("quarterly_report", [
         "quarterly activity", "quarterly report", "operations update",
-        "quarterly activities",
+        "quarterly activities", "quarterly production",
     ]),
 ]
 

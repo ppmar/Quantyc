@@ -372,6 +372,29 @@ def api_cleanup_pdfs():
     return jsonify({"deleted": deleted, "freed_mb": freed_mb})
 
 
+@app.route("/api/cleanup-orphans", methods=["POST"])
+def api_cleanup_orphans():
+    """Delete documents that have no URL and no accessible local file (orphans from old uploads)."""
+    conn = get_connection()
+    docs = conn.execute(
+        "SELECT id, local_path FROM documents WHERE (url IS NULL OR url = '') AND parse_status IN ('failed', 'needs_review')"
+    ).fetchall()
+
+    removed = 0
+    for doc in docs:
+        local = doc["local_path"]
+        if not local or not Path(local).exists():
+            conn.execute("DELETE FROM staging_extractions WHERE document_id = ?", (doc["id"],))
+            conn.execute("DELETE FROM drill_results WHERE source_doc_id = ?", (doc["id"],))
+            conn.execute("DELETE FROM documents WHERE id = ?", (doc["id"],))
+            removed += 1
+
+    conn.commit()
+    conn.close()
+    logger.info(f"Removed {removed} orphan documents")
+    return jsonify({"removed": removed})
+
+
 @app.route("/api/ingest", methods=["POST"])
 def api_ingest():
     """

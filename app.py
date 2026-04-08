@@ -344,6 +344,34 @@ def api_parse():
     return jsonify({"status": "started", "ticker": ticker or "all"})
 
 
+@app.route("/api/cleanup-pdfs", methods=["POST"])
+def api_cleanup_pdfs():
+    """Delete all PDFs that have already been parsed (status != pending)."""
+    conn = get_connection()
+    docs = conn.execute(
+        "SELECT id, local_path FROM documents WHERE local_path IS NOT NULL AND local_path != '' AND parse_status != 'pending'"
+    ).fetchall()
+    conn.close()
+
+    deleted = 0
+    freed_bytes = 0
+    for doc in docs:
+        p = Path(doc["local_path"])
+        pdf_path = p if p.is_absolute() else RAW_DIR.parent.parent / p
+        if pdf_path.exists():
+            freed_bytes += pdf_path.stat().st_size
+            pdf_path.unlink()
+            deleted += 1
+            # Clean up empty dirs
+            parent = pdf_path.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+
+    freed_mb = round(freed_bytes / (1024 * 1024), 1)
+    logger.info(f"Cleaned up {deleted} PDFs, freed {freed_mb} MB")
+    return jsonify({"deleted": deleted, "freed_mb": freed_mb})
+
+
 def _start_pipeline(ticker):
     """Reset status immediately (before thread starts) and launch pipeline."""
     global pipeline_status

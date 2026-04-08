@@ -39,6 +39,14 @@ PARSERS = {
 }
 
 
+def _resolve_pdf_path(local_path: str) -> Path:
+    """Resolve a local_path from the DB — handles both absolute and relative paths."""
+    p = Path(local_path)
+    if p.is_absolute():
+        return p
+    return BASE_DIR / p
+
+
 def _delete_pdf(doc_id: str) -> None:
     """Delete the PDF file for a document after parsing. Only results are kept."""
     conn = get_connection()
@@ -46,7 +54,7 @@ def _delete_pdf(doc_id: str) -> None:
     conn.close()
     if not row or not row["local_path"]:
         return
-    pdf_path = BASE_DIR / row["local_path"]
+    pdf_path = _resolve_pdf_path(row["local_path"])
     if pdf_path.exists():
         pdf_path.unlink()
         logger.info("Deleted PDF after parsing: %s", pdf_path.name)

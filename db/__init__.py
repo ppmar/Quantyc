@@ -17,9 +17,10 @@ def get_connection() -> sqlite3.Connection:
 def _migrate(conn: sqlite3.Connection):
     """Run lightweight schema migrations for existing databases."""
     # Add original_filename column if missing (dedup support)
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()]
-    if "original_filename" not in cols:
+    try:
         conn.execute("ALTER TABLE documents ADD COLUMN original_filename TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     # Unique index on (ticker, filename) for dedup
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_ticker_filename "

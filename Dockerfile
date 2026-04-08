@@ -13,4 +13,4 @@ RUN mkdir -p data/raw
 ENV PORT=8000
 EXPOSE ${PORT}
 
-CMD gunicorn app:app --bind 0.0.0.0:${PORT} --workers 2 --timeout 120
+CMD gunicorn app:app --bind 0.0.0.0:${PORT} --workers 2 --threads 4 --timeout 300

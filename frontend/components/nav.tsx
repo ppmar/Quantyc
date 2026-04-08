@@ -8,11 +8,8 @@ import {
   FileText,
   TrendingUp,
   AlertTriangle,
-  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
-import { api } from "@/lib/api";
 
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -24,21 +21,10 @@ const links = [
 
 export function Nav() {
   const pathname = usePathname();
-  const [parsing, setParsing] = useState(false);
-
-  async function handleParse() {
-    setParsing(true);
-    try {
-      await api.parse();
-      setTimeout(() => setParsing(false), 3000);
-    } catch {
-      setParsing(false);
-    }
-  }
 
   return (
     <nav className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-14 max-w-7xl items-center px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-6">
           <Link href="/" className="flex items-center gap-2">
             <div className="h-6 w-6 rounded-md bg-primary flex items-center justify-center">
@@ -70,17 +56,6 @@ export function Nav() {
             })}
           </div>
         </div>
-        <button
-          onClick={handleParse}
-          disabled={parsing}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-1.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary/90",
-            parsing && "opacity-60 cursor-not-allowed"
-          )}
-        >
-          <Play className="h-3.5 w-3.5" />
-          {parsing ? "Running..." : "Run Pipeline"}
-        </button>
       </div>
     </nav>
   );

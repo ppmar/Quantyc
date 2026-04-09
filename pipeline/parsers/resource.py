@@ -138,6 +138,8 @@ def extract_from_tables(pdf_source) -> list[dict]:
     """
     results = []
     try:
+        if hasattr(pdf_source, "seek"):
+            pdf_source.seek(0)
         pdf = pdfplumber.open(pdf_source)
     except Exception as e:
         logger.error("Failed to open PDF: %s", e)

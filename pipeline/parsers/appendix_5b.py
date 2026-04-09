@@ -83,6 +83,8 @@ def extract_from_tables(pdf_source) -> dict[str, float | None]:
     results = {field: None for field in ROW_PATTERNS}
 
     try:
+        if hasattr(pdf_source, "seek"):
+            pdf_source.seek(0)
         pdf = pdfplumber.open(pdf_source)
     except Exception as e:
         logger.error("Failed to open PDF: %s", e)

@@ -68,6 +68,8 @@ def extract_page_texts(pdf_source: str | Path | io.BytesIO) -> list[str]:
     """
     pages = []
     try:
+        if hasattr(pdf_source, "seek"):
+            pdf_source.seek(0)
         pdf = pdfplumber.open(pdf_source)
         for page in pdf.pages:
             text = page.extract_text() or ""

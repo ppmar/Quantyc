@@ -26,10 +26,14 @@ TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
         "mineral resource estimate", "ore reserve estimate",
         "resource update", "maiden resource",
     ]),
+    ("exploration_results", [
+        "drill results", "exploration results", "drill hole results",
+        "assay results", "significant intercept",
+    ]),
     ("drill_results", [
         "drill", "drilling", "assay", "intercept", "intersection",
         "high-grade", "high grade", "metres @", "meters @", "m @",
-        "g/t", "exploration results", "drill hole", "drill program",
+        "g/t", "drill hole", "drill program",
     ]),
     ("capital_raise", [
         "placement", "entitlement offer", "rights issue", "issue of securities",
@@ -39,6 +43,9 @@ TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
     ("quarterly_report", [
         "quarterly activity", "quarterly report", "operations update",
         "quarterly activities", "quarterly production",
+        "quarter update", "quarter report", "quarterly update",
+        "production update", "march quarter", "june quarter",
+        "september quarter", "december quarter",
     ]),
 ]
 

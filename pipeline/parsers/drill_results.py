@@ -93,6 +93,37 @@ def _score_page(text: str, keywords: list[str]) -> int:
     return sum(1 for kw in keywords if kw in text_lower)
 
 
+def _merge_header_rows(table: list[list], max_header_rows: int = 3) -> tuple[list[str], int]:
+    """
+    Merge multi-row headers into a single row by concatenating non-empty cells
+    vertically. Returns (merged_header, first_data_row_index).
+    """
+    if not table:
+        return [], 0
+
+    num_cols = max(len(row) for row in table if row)
+    merged = [""] * num_cols
+    data_start = 0
+
+    for i in range(min(max_header_rows, len(table))):
+        row = table[i]
+        if not row:
+            continue
+        row_text = " ".join(str(c) for c in row if c).lower()
+        # Stop merging when we hit a data row (has a hole ID-like value)
+        if i > 0 and re.search(r"[A-Z]{2,6}[-]?\d{2,5}", " ".join(str(c) for c in row if c)):
+            data_start = i
+            break
+        for col_idx, cell in enumerate(row):
+            if cell and col_idx < num_cols:
+                cell_str = str(cell).strip()
+                if cell_str and cell_str.lower() not in merged[col_idx].lower():
+                    merged[col_idx] = (merged[col_idx] + " " + cell_str).strip()
+        data_start = i + 1
+
+    return merged, data_start
+
+
 def _match_columns(header_row: list[str], patterns: dict) -> dict[str, int]:
     """
     Match table header cells to known column names.
@@ -156,19 +187,23 @@ def extract_collars(pdf_source) -> dict[str, dict]:
             if not _is_collar_table(table):
                 continue
 
-            # Find header row (could be row 0 or row 1)
-            header_idx = 0
-            for i in range(min(2, len(table))):
-                row_text = " ".join(str(c) for c in table[i] if c).lower()
-                if "hole" in row_text and ("east" in row_text or "dip" in row_text):
-                    header_idx = i
-                    break
+            # Merge multi-row headers for collar tables
+            merged_header, data_start = _merge_header_rows(table, max_header_rows=2)
+            col_map = _match_columns(merged_header, COLLAR_PATTERNS)
 
-            col_map = _match_columns(table[header_idx], COLLAR_PATTERNS)
+            # Fallback: try single-row header
+            if "hole_id" not in col_map:
+                for i in range(min(2, len(table))):
+                    row_text = " ".join(str(c) for c in table[i] if c).lower()
+                    if "hole" in row_text and ("east" in row_text or "dip" in row_text):
+                        col_map = _match_columns(table[i], COLLAR_PATTERNS)
+                        data_start = i + 1
+                        break
+
             if "hole_id" not in col_map:
                 continue
 
-            for row in table[header_idx + 1:]:
+            for row in table[data_start:]:
                 if not row:
                     continue
                 hole_id_idx = col_map["hole_id"]
@@ -202,6 +237,8 @@ def extract_intercepts_from_tables(pdf_source) -> list[dict]:
     """
     results = []
     try:
+        if hasattr(pdf_source, "seek"):
+            pdf_source.seek(0)
         pdf = pdfplumber.open(pdf_source)
     except Exception as e:
         logger.error("Failed to open PDF: %s", e)
@@ -223,21 +260,24 @@ def extract_intercepts_from_tables(pdf_source) -> list[dict]:
 
             logger.info("Found intercept table on page %d", page_num + 1)
 
-            # Find header row
-            header_idx = 0
-            for i in range(min(3, len(table))):
-                row_text = " ".join(str(c) for c in table[i] if c).lower()
-                if any(w in row_text for w in ["from", "to", "interval", "g/t", "au"]):
-                    header_idx = i
-                    break
+            # Merge multi-row headers (common in mining PDFs)
+            merged_header, data_start = _merge_header_rows(table)
+            col_map = _match_columns(merged_header, COLUMN_PATTERNS)
 
-            col_map = _match_columns(table[header_idx], COLUMN_PATTERNS)
+            # Fallback: try single-row header detection
+            if "from_m" not in col_map and "interval_m" not in col_map:
+                for i in range(min(3, len(table))):
+                    row_text = " ".join(str(c) for c in table[i] if c).lower()
+                    if any(w in row_text for w in ["from", "to", "interval", "g/t", "au"]):
+                        col_map = _match_columns(table[i], COLUMN_PATTERNS)
+                        data_start = i + 1
+                        break
 
             if "from_m" not in col_map and "interval_m" not in col_map:
                 continue
 
             current_hole = None
-            for row in table[header_idx + 1:]:
+            for row in table[data_start:]:
                 if not row:
                     continue
 
@@ -306,6 +346,8 @@ def extract_intercepts_from_text(pdf_source) -> list[dict]:
     """
     results = []
     try:
+        if hasattr(pdf_source, "seek"):
+            pdf_source.seek(0)
         pdf = pdfplumber.open(pdf_source)
     except Exception as e:
         logger.error("Failed to open PDF: %s", e)

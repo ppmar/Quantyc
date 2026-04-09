@@ -114,6 +114,8 @@ def _extract_from_tables(pdf_source) -> dict:
                   "net cash used in investing", "net cash from investing"]
 
     try:
+        if hasattr(pdf_source, "seek"):
+            pdf_source.seek(0)
         pdf = pdfplumber.open(pdf_source)
     except Exception:
         return results

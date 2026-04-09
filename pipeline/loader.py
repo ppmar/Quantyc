@@ -142,6 +142,15 @@ def load_resource(doc_id: str) -> int:
     """
     conn = get_connection()
 
+    # Dedup: skip if already loaded from this document
+    already = conn.execute(
+        "SELECT COUNT(*) as n FROM resources WHERE source_doc_id = ?", (doc_id,)
+    ).fetchone()
+    if already and already["n"] > 0:
+        logger.info("Resources already loaded for doc %s, skipping", doc_id)
+        conn.close()
+        return already["n"]
+
     doc = conn.execute(
         "SELECT company_ticker, announcement_date FROM documents WHERE id = ?",
         (doc_id,),
@@ -291,6 +300,15 @@ def load_resource(doc_id: str) -> int:
 def load_study(doc_id: str) -> bool:
     """Load study data from staging into studies table."""
     conn = get_connection()
+
+    # Dedup: skip if already loaded from this document
+    already = conn.execute(
+        "SELECT COUNT(*) as n FROM studies WHERE source_doc_id = ?", (doc_id,)
+    ).fetchone()
+    if already and already["n"] > 0:
+        logger.info("Study already loaded for doc %s, skipping", doc_id)
+        conn.close()
+        return True
 
     doc = conn.execute(
         "SELECT company_ticker, announcement_date FROM documents WHERE id = ?",
@@ -448,6 +466,120 @@ def load_capital_raise(doc_id: str) -> bool:
     return True
 
 
+def load_generic_financials(doc_id: str) -> bool:
+    """
+    Load financial data from generic-parsed documents (quarterly_report, annual_report, other).
+    The generic parser writes staging fields prefixed with '{doc_type}_'.
+    """
+    conn = get_connection()
+
+    # Dedup: skip if already loaded
+    already = conn.execute(
+        "SELECT COUNT(*) as n FROM company_financials WHERE source_doc_id = ?", (doc_id,)
+    ).fetchone()
+    if already and already["n"] > 0:
+        logger.info("Generic financials already loaded for doc %s, skipping", doc_id)
+        conn.close()
+        return True
+
+    doc = conn.execute(
+        "SELECT company_ticker, announcement_date, doc_type FROM documents WHERE id = ?",
+        (doc_id,),
+    ).fetchone()
+    if not doc:
+        conn.close()
+        return False
+
+    ticker = doc["company_ticker"]
+    effective_date = doc["announcement_date"]
+    doc_type = doc["doc_type"] or "other"
+
+    fields = _get_staging_fields(conn, doc_id, f"{doc_type}_")
+
+    def _float_or_none(v):
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    # Map generic field names to financials columns
+    cash = (
+        _float_or_none(fields.get("cash_at_end_quarter_aud"))
+        or _float_or_none(fields.get("cash_at_year_end_aud"))
+        or _float_or_none(fields.get("cash_mentioned_aud"))
+    )
+
+    operating = _float_or_none(fields.get("operating_cashflow_aud"))
+    investing = _float_or_none(fields.get("investing_cashflow_aud"))
+
+    quarterly_burn = None
+    if operating is not None and investing is not None:
+        quarterly_burn = abs(operating) + abs(investing)
+    elif operating is not None:
+        quarterly_burn = abs(operating)
+
+    cash_runway = None
+    if cash is not None and quarterly_burn and quarterly_burn > 0:
+        cash_runway = (cash / quarterly_burn) * 3
+
+    shares = _float_or_none(fields.get("shares_on_issue"))
+
+    if cash is None and shares is None and quarterly_burn is None:
+        # No core financial data, but staging extractions may have production/revenue.
+        # Ensure company exists so the data is still queryable.
+        conn.execute(
+            "INSERT OR IGNORE INTO companies (ticker, updated_at) VALUES (?, CURRENT_TIMESTAMP)",
+            (ticker,),
+        )
+        conn.commit()
+        conn.close()
+        logger.info("No cash/shares data in %s (staging has other fields)", doc_id)
+        return True  # data is in staging, not a failure
+
+    # Check for existing record
+    existing = conn.execute(
+        "SELECT id FROM company_financials WHERE ticker = ? AND source_doc_id = ?",
+        (ticker, doc_id),
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            """UPDATE company_financials
+               SET cash_aud = COALESCE(?, cash_aud),
+                   quarterly_burn = COALESCE(?, quarterly_burn),
+                   cash_runway_months = COALESCE(?, cash_runway_months),
+                   shares_basic = COALESCE(?, shares_basic),
+                   effective_date = ?
+               WHERE id = ?""",
+            (cash, quarterly_burn, cash_runway, shares, effective_date, existing["id"]),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO company_financials
+               (ticker, effective_date, cash_aud, quarterly_burn, cash_runway_months,
+                shares_basic, source_doc_id, extraction_method, confidence, needs_review)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'rule_based', 'medium', ?)""",
+            (
+                ticker, effective_date, cash, quarterly_burn, cash_runway,
+                shares, doc_id,
+                1 if cash_runway is not None and cash_runway < 6 else 0,
+            ),
+        )
+
+    conn.execute(
+        "INSERT OR IGNORE INTO companies (ticker, updated_at) VALUES (?, CURRENT_TIMESTAMP)",
+        (ticker,),
+    )
+
+    conn.commit()
+    conn.close()
+    logger.info("Loaded generic financials for %s (cash=%s, burn=%s, shares=%s)",
+                ticker, cash, quarterly_burn, shares)
+    return True
+
+
 def load_document(doc_id: str) -> bool:
     """Load a single document's staging data into core tables based on doc_type."""
     conn = get_connection()
@@ -475,6 +607,11 @@ def load_document(doc_id: str) -> bool:
         return load_study(doc_id)
     elif doc_type == "capital_raise":
         return load_capital_raise(doc_id)
+    elif doc_type in ("drill_results", "exploration_results"):
+        # Drill results are loaded directly by the parser — nothing to do here
+        return True
+    elif doc_type in ("quarterly_report", "annual_report", "other"):
+        return load_generic_financials(doc_id)
     else:
         logger.info("No loader for doc_type '%s' (doc %s)", doc_type, doc_id)
         return False

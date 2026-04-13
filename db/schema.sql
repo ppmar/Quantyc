@@ -1,194 +1,171 @@
--- ASX Junior Miner Valuation Pipeline — Database Schema
+-- Quantyc Lean Schema — Week 1+2
+-- All timestamps are ISO-8601 text. All money in reporting currency.
 
+-- ─────────────────────────────────────────────────────────────
+-- documents: every PDF ever ingested (manual upload or ASX poll)
+-- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS documents (
-    id              TEXT PRIMARY KEY,   -- sha256 of url
-    company_ticker  TEXT NOT NULL,
-    doc_type        TEXT,               -- appendix_5b | resource_update | drill_results | study | capital_raise | annual_report | quarterly_report | other
-    header          TEXT,               -- announcement title from ASX
-    original_filename TEXT,             -- original PDF filename for dedup
-    announcement_date DATE,
-    url             TEXT,
-    local_path      TEXT,
-    parse_status    TEXT DEFAULT 'pending',  -- pending | done | failed | needs_review
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    document_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker             TEXT    NOT NULL,
+    url                TEXT    NOT NULL,
+    sha256             TEXT    NOT NULL UNIQUE,    -- sha256("ticker:url")
+    source             TEXT    NOT NULL,           -- 'asx_api' | 'manual_upload'
+    announcement_date  TEXT,                       -- ISO date from ASX
+    ingested_at        TEXT    NOT NULL,
+    doc_type           TEXT,                       -- classified type
+    header             TEXT,                       -- announcement headline
+    parse_status       TEXT    NOT NULL DEFAULT 'pending',
+                                                   -- pending|classified|parsed|failed|skipped
+    parse_error        TEXT,
+    local_path         TEXT    NOT NULL DEFAULT '' -- always empty, stateless
 );
+CREATE INDEX IF NOT EXISTS idx_documents_ticker ON documents(ticker);
+CREATE INDEX IF NOT EXISTS idx_documents_type   ON documents(doc_type);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(parse_status);
+CREATE INDEX IF NOT EXISTS idx_documents_sha256 ON documents(sha256);
 
+-- ─────────────────────────────────────────────────────────────
+-- companies: one row per ASX ticker
+-- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS companies (
-    ticker          TEXT PRIMARY KEY,
-    name            TEXT,
-    primary_commodity TEXT,             -- gold | copper | lithium | silver | zinc | etc
-    reporting_currency TEXT DEFAULT 'AUD',
-    fiscal_year_end TEXT,              -- MM-DD
-    updated_at      TIMESTAMP
+    company_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker             TEXT    NOT NULL UNIQUE,
+    name               TEXT,
+    reporting_currency TEXT    DEFAULT 'AUD',
+    fiscal_year_end    TEXT,                       -- e.g. '06-30'
+    first_seen_at      TEXT    NOT NULL,
+    last_updated_at    TEXT    NOT NULL
 );
 
+-- ─────────────────────────────────────────────────────────────
+-- company_financials: point-in-time capital structure snapshots
+-- One row per (company, effective_date). Never overwrite; append.
+-- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS company_financials (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker          TEXT NOT NULL,
-    effective_date  DATE NOT NULL,
-    shares_basic    REAL,
-    shares_fd       REAL,               -- fully diluted: basic + options + warrants + rights + convertibles
-    cash_aud        REAL,
-    debt_aud        REAL,
-    convertibles_aud REAL,
-    quarterly_burn  REAL,               -- cash used in operations + investing, last quarter
-    cash_runway_months REAL,            -- derived: cash / quarterly_burn * 3
-    last_raise_date DATE,
-    last_raise_price REAL,
-    last_raise_shares REAL,
-    source_doc_id   TEXT,
-    extraction_method TEXT,
-    confidence      TEXT,               -- high | medium | low
-    needs_review    BOOLEAN DEFAULT 0,
-    FOREIGN KEY (ticker) REFERENCES companies(ticker),
-    FOREIGN KEY (source_doc_id) REFERENCES documents(id)
+    financial_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id         INTEGER NOT NULL REFERENCES companies(company_id),
+    document_id        INTEGER NOT NULL REFERENCES documents(document_id),
+    effective_date     TEXT    NOT NULL,           -- period-end of the filing
+    announcement_date  TEXT    NOT NULL,
+    shares_basic       REAL,
+    shares_fd          REAL,                       -- fully diluted
+    options_outstanding REAL,
+    perf_rights_outstanding REAL,
+    convertibles_face_value REAL,
+    cash               REAL,
+    debt               REAL,
+    quarterly_opex_burn REAL,                      -- from Appendix 5B section 1
+    quarterly_invest_burn REAL,                    -- section 2
+    extraction_method  TEXT    NOT NULL,           -- 'rule'|'llm'|'manual'
+    confidence         TEXT    NOT NULL,           -- 'high'|'medium'|'low'
+    needs_review       INTEGER NOT NULL DEFAULT 0, -- 0/1
+    review_reason      TEXT,
+    reviewed_at        TEXT,                       -- ISO timestamp of human override
+    created_at         TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cf_company_date ON company_financials(company_id, effective_date DESC);
+CREATE INDEX IF NOT EXISTS idx_cf_review       ON company_financials(needs_review);
+CREATE INDEX IF NOT EXISTS idx_cf_document     ON company_financials(document_id);
+
+-- ─────────────────────────────────────────────────────────────
+-- Staging table for Appendix 5B extraction (Week 2)
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS _stg_appendix_5b (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id        INTEGER NOT NULL REFERENCES documents(document_id),
+    effective_date     TEXT,
+    cash               REAL,
+    debt               REAL,
+    quarterly_opex_burn REAL,
+    quarterly_invest_burn REAL,
+    raw_json           TEXT,                       -- full extracted table JSON
+    extraction_method  TEXT    NOT NULL DEFAULT 'rule',
+    created_at         TEXT    NOT NULL,
+    UNIQUE(document_id)
 );
 
+-- ─────────────────────────────────────────────────────────────
+-- Staging table for issue-of-securities extraction (Week 2)
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS _stg_issue_of_securities (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id        INTEGER NOT NULL REFERENCES documents(document_id),
+    effective_date     TEXT,
+    security_class     TEXT,                       -- 'ordinary' | 'option' | 'performance_right'
+    quantity           REAL,
+    total_on_issue     REAL,
+    exercise_price     REAL,
+    raw_json           TEXT,
+    extraction_method  TEXT    NOT NULL DEFAULT 'rule',
+    created_at         TEXT    NOT NULL,
+    UNIQUE(document_id, security_class)
+);
+
+-- ─────────────────────────────────────────────────────────────
+-- Placeholders for later weeks — create empty tables only.
+-- Do not populate. Do not extract into them yet.
+-- ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS projects (
-    id              TEXT PRIMARY KEY,   -- ticker_projectname slug
-    ticker          TEXT NOT NULL,
-    project_name    TEXT,
-    country         TEXT DEFAULT 'Australia',
-    state           TEXT,               -- WA | QLD | NSW | SA | NT | VIC | TAS
-    stage           TEXT,               -- concept | discovery | feasibility | development | production
-    ownership_pct   REAL,
-    royalty_type    TEXT,               -- NSR | GRR | stream | none
-    royalty_rate    REAL,
-    stream_flag     BOOLEAN DEFAULT 0,
-    permitting_risk TEXT,               -- low | medium | high | critical
-    jurisdiction_risk TEXT,             -- low | medium | high
-    is_primary      BOOLEAN DEFAULT 1,  -- is this the company's main asset?
-    source_doc_id   TEXT,
-    updated_at      TIMESTAMP,
-    FOREIGN KEY (ticker) REFERENCES companies(ticker),
-    FOREIGN KEY (source_doc_id) REFERENCES documents(id)
+    project_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id    INTEGER NOT NULL REFERENCES companies(company_id),
+    project_name  TEXT    NOT NULL,
+    country       TEXT,
+    state         TEXT,
+    stage         TEXT,
+    ownership_pct REAL,
+    created_at    TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS project_commodities (
-    project_id      TEXT NOT NULL,
-    commodity       TEXT NOT NULL,      -- gold | silver | copper | lithium | zinc | etc
-    is_primary      BOOLEAN DEFAULT 1,
-    PRIMARY KEY (project_id, commodity),
-    FOREIGN KEY (project_id) REFERENCES projects(id)
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id   INTEGER NOT NULL REFERENCES projects(project_id),
+    commodity    TEXT    NOT NULL,
+    is_primary   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS resources (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id      TEXT NOT NULL,
-    commodity       TEXT NOT NULL,
-    effective_date  DATE,
-    estimate_type   TEXT,               -- resource | reserve
-    category        TEXT,               -- Measured | Indicated | Inferred | Proven | Probable | Total
-    tonnes_mt       REAL,               -- million tonnes
-    grade           REAL,
-    grade_unit      TEXT,               -- g/t | % | ppm | Li2O%
-    contained_metal REAL,
-    contained_unit  TEXT,               -- koz | Moz | kt | Mlb | Mt
-    attributable_contained REAL,        -- derived: contained_metal * ownership_pct
-    cut_off_grade   REAL,
-    source_doc_id   TEXT,
-    extraction_method TEXT,
-    confidence      TEXT,
-    needs_review    BOOLEAN DEFAULT 0,
-    FOREIGN KEY (project_id) REFERENCES projects(id),
-    FOREIGN KEY (source_doc_id) REFERENCES documents(id)
+    resource_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id        INTEGER NOT NULL REFERENCES projects(project_id),
+    document_id       INTEGER REFERENCES documents(document_id),
+    effective_date    TEXT    NOT NULL,
+    commodity         TEXT    NOT NULL,
+    resource_or_reserve TEXT  NOT NULL,
+    category          TEXT    NOT NULL,            -- Measured|Indicated|Inferred|Proven|Probable
+    tonnes            REAL,
+    grade             REAL,
+    contained_metal   REAL,
+    attributable_contained_metal REAL,
+    created_at        TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS studies (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id      TEXT NOT NULL,
-    study_stage     TEXT,               -- scoping | pfs | dfs | production
-    study_date      DATE,
+    study_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id     INTEGER NOT NULL REFERENCES projects(project_id),
+    document_id    INTEGER REFERENCES documents(document_id),
+    study_stage    TEXT,                           -- scoping|PFS|DFS
+    study_date     TEXT,
     mine_life_years REAL,
     annual_production REAL,
-    production_unit TEXT,               -- koz/yr | kt/yr | etc
-    recovery_pct    REAL,
-    initial_capex_musd REAL,
-    sustaining_capex_musd REAL,
-    opex_per_unit   REAL,
-    opex_unit       TEXT,               -- $/oz | $/t
-    post_tax_npv_musd REAL,
-    irr_pct         REAL,
-    assumed_commodity_price REAL,
-    assumed_price_unit TEXT,            -- $/oz | $/t | $/lb
-    assumed_fx_audusd REAL,
-    discount_rate_pct REAL,
-    source_doc_id   TEXT,
-    extraction_method TEXT,
-    confidence      TEXT,
-    needs_review    BOOLEAN DEFAULT 0,
-    FOREIGN KEY (project_id) REFERENCES projects(id),
-    FOREIGN KEY (source_doc_id) REFERENCES documents(id)
+    recovery_pct   REAL,
+    initial_capex  REAL,
+    sustaining_capex REAL,
+    opex           REAL,
+    post_tax_npv   REAL,
+    irr_pct        REAL,
+    assumed_price_deck TEXT,                       -- JSON blob
+    assumed_fx     REAL
 );
 
-CREATE TABLE IF NOT EXISTS drill_results (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id      TEXT NOT NULL,
-    hole_id         TEXT NOT NULL,       -- e.g. SDDSC200
-    prospect        TEXT,                -- e.g. Apollo, Golden Dyke
-    from_m          REAL,                -- interval start depth in metres
-    to_m            REAL,                -- interval end depth in metres
-    interval_m      REAL,                -- downhole interval length
-    true_width_m    REAL,                -- estimated true width (null if not stated)
-    au_gt           REAL,                -- gold grade g/t
-    au_eq_gt        REAL,                -- gold-equivalent grade g/t (if poly-metallic)
-    sb_pct          REAL,                -- antimony %
-    cu_pct          REAL,                -- copper %
-    ag_gt           REAL,                -- silver g/t
-    other_element   TEXT,                -- any other element reported
-    other_grade     REAL,
-    other_unit      TEXT,
-    is_including     BOOLEAN DEFAULT 0,  -- is this a sub-interval ("including") row?
-    depth_from_surface REAL,             -- vertical depth estimate (null if not available)
-    azimuth         REAL,
-    dip             REAL,
-    easting         REAL,
-    northing        REAL,
-    elevation       REAL,
-    announcement_date DATE,
-    source_doc_id   TEXT,
-    extraction_method TEXT,
-    confidence      TEXT,
-    needs_review    BOOLEAN DEFAULT 0,
-    FOREIGN KEY (project_id) REFERENCES projects(id),
-    FOREIGN KEY (source_doc_id) REFERENCES documents(id)
+CREATE TABLE IF NOT EXISTS valuations (
+    valuation_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id     INTEGER NOT NULL REFERENCES companies(company_id),
+    run_date       TEXT    NOT NULL,
+    method         TEXT    NOT NULL,
+    enterprise_value REAL,
+    ev_per_attributable_unit REAL,
+    project_nav    REAL,
+    risked_nav     REAL,
+    per_share_basic REAL,
+    per_share_fd   REAL,
+    funding_gap    REAL
 );
-
-CREATE TABLE IF NOT EXISTS macro_assumptions (
-    date            DATE PRIMARY KEY,
-    gold_spot_usd   REAL,
-    copper_spot_usd REAL,
-    lithium_spot_usd REAL,
-    silver_spot_usd REAL,
-    aud_usd         REAL,
-    base_discount_rate REAL DEFAULT 0.08,
-    updated_at      TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS staging_extractions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id     TEXT NOT NULL,
-    field_name      TEXT NOT NULL,
-    raw_value       TEXT,
-    normalized_value REAL,
-    unit            TEXT,
-    extraction_method TEXT,             -- rule_based | llm | manual
-    confidence      TEXT,               -- high | medium | low
-    needs_review    BOOLEAN DEFAULT 0,
-    reviewed        BOOLEAN DEFAULT 0,
-    extracted_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (document_id) REFERENCES documents(id)
-);
-
--- Indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_documents_ticker ON documents(company_ticker);
-CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(doc_type);
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(parse_status);
-CREATE INDEX IF NOT EXISTS idx_financials_ticker ON company_financials(ticker, effective_date);
-CREATE INDEX IF NOT EXISTS idx_projects_ticker ON projects(ticker);
-CREATE INDEX IF NOT EXISTS idx_resources_project ON resources(project_id);
-CREATE INDEX IF NOT EXISTS idx_studies_project ON studies(project_id);
-CREATE INDEX IF NOT EXISTS idx_staging_document ON staging_extractions(document_id);
-CREATE INDEX IF NOT EXISTS idx_drill_project ON drill_results(project_id);
-CREATE INDEX IF NOT EXISTS idx_drill_hole ON drill_results(hole_id);
-CREATE INDEX IF NOT EXISTS idx_drill_doc ON drill_results(source_doc_id);

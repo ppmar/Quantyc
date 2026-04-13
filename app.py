@@ -1,45 +1,39 @@
 """
-ASX Junior Miner API
+Quantyc API
 
-REST API for the valuation pipeline. Serves data to the Next.js frontend.
+Flask app with blueprints. Registers routes from api/ modules.
 
 Usage:
     python app.py                        # dev server on port 8000
     gunicorn app:app -b 0.0.0.0:$PORT    # production (Railway)
 """
 
-import hashlib
 import logging
 import os
 import threading
 import time
 import traceback
-from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+from db import init_db
 
 # Pipeline progress tracking
 pipeline_status = {
     "running": False,
     "ticker": None,
-    "phase": None,       # registering | parsing | normalizing | loading | done | error
+    "phase": None,
     "current_doc": None,
     "docs_total": 0,
     "docs_done": 0,
     "started_at": None,
     "error": None,
+    "failed_count": 0,
 }
-
-from db import get_connection, init_db
-from pipeline.classifier import classify_title
-from valuation.engine import valuate_ticker, valuate_all
-
-RAW_DIR = Path(__file__).resolve().parent / "data" / "raw"
 
 app = Flask(__name__)
 CORS(app)
@@ -47,369 +41,39 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key-change-in-prod"
 
 init_db()
 
+# Register blueprints
+from api.upload import bp as upload_bp
+from api.documents import bp as documents_bp
+from api.financials import bp as financials_bp
+from api.review import bp as review_bp
 
-def query_db(sql, params=(), one=False):
-    conn = get_connection()
-    rows = conn.execute(sql, params).fetchall()
-    conn.close()
-    result = [dict(r) for r in rows]
-    return result[0] if one and result else (None if one else result)
+app.register_blueprint(upload_bp)
+app.register_blueprint(documents_bp)
+app.register_blueprint(financials_bp)
+app.register_blueprint(review_bp)
 
 
 # ---------------------------------------------------------------------------
-# API routes
+# Pipeline trigger endpoints
 # ---------------------------------------------------------------------------
-
-@app.route("/api/stats")
-def api_stats():
-    return jsonify({
-        "companies": query_db("SELECT COUNT(*) as n FROM companies", one=True)["n"],
-        "documents": query_db("SELECT COUNT(*) as n FROM documents", one=True)["n"],
-        "docs_done": query_db("SELECT COUNT(*) as n FROM documents WHERE parse_status='done'", one=True)["n"],
-        "docs_pending": query_db("SELECT COUNT(*) as n FROM documents WHERE parse_status='pending'", one=True)["n"],
-        "docs_failed": query_db("SELECT COUNT(*) as n FROM documents WHERE parse_status='failed'", one=True)["n"],
-        "staging_rows": query_db("SELECT COUNT(*) as n FROM staging_extractions", one=True)["n"],
-        "needs_review": query_db("SELECT COUNT(*) as n FROM staging_extractions WHERE needs_review=1", one=True)["n"],
-        "resources": query_db("SELECT COUNT(*) as n FROM resources WHERE category != 'Total'", one=True)["n"],
-        "financials": query_db("SELECT COUNT(*) as n FROM company_financials", one=True)["n"],
-        "studies": query_db("SELECT COUNT(*) as n FROM studies", one=True)["n"],
-        "drill_intercepts": query_db("SELECT COUNT(*) as n FROM drill_results", one=True)["n"],
-        "drill_holes": query_db("SELECT COUNT(DISTINCT hole_id) as n FROM drill_results", one=True)["n"],
-    })
-
-
-@app.route("/api/companies")
-def api_companies():
-    rows = query_db("""
-        SELECT c.ticker, c.name, c.primary_commodity,
-               (SELECT COUNT(*) FROM documents WHERE company_ticker = c.ticker) as doc_count,
-               (SELECT COUNT(*) FROM documents WHERE company_ticker = c.ticker AND parse_status = 'done') as parsed_count,
-               (SELECT stage FROM projects WHERE ticker = c.ticker AND is_primary = 1 LIMIT 1) as stage,
-               (SELECT cash_aud FROM company_financials WHERE ticker = c.ticker ORDER BY effective_date DESC LIMIT 1) as cash,
-               (SELECT cash_runway_months FROM company_financials WHERE ticker = c.ticker ORDER BY effective_date DESC LIMIT 1) as runway
-        FROM companies c
-        ORDER BY c.ticker
-    """)
-    return jsonify(rows)
-
-
-@app.route("/api/company/<ticker>")
-def api_company(ticker):
-    ticker = ticker.upper()
-    company = query_db("SELECT * FROM companies WHERE ticker = ?", (ticker,), one=True)
-    if not company:
-        return jsonify({"error": "Not found"}), 404
-
-    financials = query_db(
-        "SELECT * FROM company_financials WHERE ticker = ? ORDER BY effective_date DESC",
-        (ticker,),
-    )
-    projects = query_db("SELECT * FROM projects WHERE ticker = ?", (ticker,))
-    resources = query_db(
-        """SELECT r.*, p.project_name
-           FROM resources r JOIN projects p ON r.project_id = p.id
-           WHERE p.ticker = ? ORDER BY r.category""",
-        (ticker,),
-    )
-    studies = query_db(
-        """SELECT s.*, p.project_name
-           FROM studies s JOIN projects p ON s.project_id = p.id
-           WHERE p.ticker = ? ORDER BY s.study_date DESC""",
-        (ticker,),
-    )
-    documents = query_db(
-        "SELECT * FROM documents WHERE company_ticker = ? ORDER BY announcement_date DESC",
-        (ticker,),
-    )
-    drill_results = query_db(
-        """SELECT dr.hole_id, dr.from_m, dr.to_m, dr.interval_m,
-                  dr.au_gt, dr.au_eq_gt, dr.sb_pct, dr.is_including
-           FROM drill_results dr JOIN projects p ON dr.project_id = p.id
-           WHERE p.ticker = ? ORDER BY dr.hole_id, dr.from_m LIMIT 200""",
-        (ticker,),
-    )
-
-    valuation = None
-    try:
-        v = valuate_ticker(ticker)
-        valuation = {
-            "ticker": v.ticker,
-            "stage": v.stage,
-            "method": v.method,
-            "ev_aud": v.ev_aud,
-            "nav_aud": v.nav_aud,
-            "nav_per_share": v.nav_per_share,
-            "ev_per_resource_unit": v.ev_per_resource_unit,
-            "resource_unit": v.resource_unit,
-            "total_attributable_resource": v.total_attributable_resource,
-            "shares_fd": v.shares_fd,
-            "cash_aud": v.cash_aud,
-            "debt_aud": v.debt_aud,
-            "red_flags": v.red_flags,
-        }
-    except Exception:
-        pass
-
-    return jsonify({
-        "company": company,
-        "financials": financials,
-        "projects": projects,
-        "resources": resources,
-        "studies": studies,
-        "documents": documents,
-        "drill_results": drill_results,
-        "valuation": valuation,
-    })
-
-
-@app.route("/api/documents")
-def api_documents():
-    status = request.args.get("status")
-    doc_type = request.args.get("type")
-
-    query = "SELECT * FROM documents WHERE 1=1"
-    params = []
-    if status:
-        query += " AND parse_status = ?"
-        params.append(status)
-    if doc_type:
-        query += " AND doc_type = ?"
-        params.append(doc_type)
-    query += " ORDER BY company_ticker, created_at DESC"
-
-    return jsonify(query_db(query, params))
-
-
-@app.route("/api/valuations")
-def api_valuations():
-    results = valuate_all()
-    return jsonify([{
-        "ticker": v.ticker,
-        "stage": v.stage,
-        "method": v.method,
-        "ev_aud": v.ev_aud,
-        "nav_aud": v.nav_aud,
-        "nav_per_share": v.nav_per_share,
-        "ev_per_resource_unit": v.ev_per_resource_unit,
-        "resource_unit": v.resource_unit,
-        "total_attributable_resource": v.total_attributable_resource,
-        "shares_fd": v.shares_fd,
-        "cash_aud": v.cash_aud,
-        "debt_aud": v.debt_aud,
-        "red_flags": v.red_flags,
-    } for v in results])
-
-
-@app.route("/api/review")
-def api_review():
-    from review.exceptions import (
-        get_flagged_staging, get_flagged_financials, get_flagged_resources,
-        get_flagged_studies, get_failed_documents, check_red_flags
-    )
-    conn = get_connection()
-    data = {
-        "staging": get_flagged_staging(conn),
-        "financials": get_flagged_financials(conn),
-        "resources": get_flagged_resources(conn),
-        "studies": get_flagged_studies(conn),
-        "failed_docs": get_failed_documents(conn),
-        "red_flags": check_red_flags(conn),
-    }
-    conn.close()
-    return jsonify(data)
-
-
-@app.route("/api/resources/<ticker>")
-def api_resources(ticker):
-    rows = query_db(
-        """SELECT r.category, r.contained_metal, r.contained_unit, r.commodity
-           FROM resources r JOIN projects p ON r.project_id = p.id
-           WHERE p.ticker = ? AND r.category != 'Total' AND r.contained_metal IS NOT NULL""",
-        (ticker.upper(),),
-    )
-    return jsonify(rows)
-
-
-@app.route("/api/drill/<ticker>")
-def api_drill(ticker):
-    rows = query_db(
-        """SELECT dr.hole_id, dr.from_m, dr.to_m, dr.interval_m,
-                  dr.au_gt, dr.au_eq_gt, dr.sb_pct, dr.is_including
-           FROM drill_results dr JOIN projects p ON dr.project_id = p.id
-           WHERE p.ticker = ? AND dr.is_including = 0
-           ORDER BY COALESCE(dr.au_eq_gt, dr.au_gt, 0) * COALESCE(dr.interval_m, 0) DESC
-           LIMIT 30""",
-        (ticker.upper(),),
-    )
-    return jsonify(rows)
-
 
 @app.route("/api/pipeline/status")
 def api_pipeline_status():
     return jsonify(pipeline_status)
 
 
-@app.route("/api/upload", methods=["POST"])
-def api_upload():
-    """
-    Upload PDFs for a ticker. Accepts multipart form data with:
-    - ticker: company ticker (required)
-    - doc_type: override document type (optional, e.g. appendix_5b, resource_update, study)
-    - files: one or more PDF files
-    Auto-registers, classifies, parses, normalizes, and loads each file.
-    """
-    ticker = request.form.get("ticker", "").strip().upper()
-    if not ticker:
-        return jsonify({"error": "ticker is required"}), 400
-
-    override_doc_type = request.form.get("doc_type", "").strip()
-
-    files = request.files.getlist("files")
-    if not files:
-        return jsonify({"error": "No files provided"}), 400
-
-    ticker_dir = RAW_DIR / ticker
-    ticker_dir.mkdir(parents=True, exist_ok=True)
-
-    uploaded = []
-    skipped_dupes = []
-    for f in files:
-        if not f.filename or not f.filename.lower().endswith(".pdf"):
-            continue
-        filename = secure_filename(f.filename)
-
-        # Check for duplicate by (ticker, filename)
-        conn = get_connection()
-        existing = conn.execute(
-            "SELECT id, parse_status FROM documents WHERE company_ticker = ? AND original_filename = ?",
-            (ticker, filename),
-        ).fetchone()
-        conn.close()
-        if existing:
-            skipped_dupes.append({"filename": filename, "existing_doc_id": existing["id"], "status": existing["parse_status"]})
-            continue
-
-        save_path = ticker_dir / filename
-        f.save(str(save_path))
-
-        # Register in DB
-        rel_path = str(save_path.relative_to(Path(__file__).resolve().parent))
-        doc_id = hashlib.sha256(rel_path.encode()).hexdigest()[:16]
-        header = filename.replace(".pdf", "").replace("-", " ").replace("_", " ")
-        doc_type = override_doc_type if override_doc_type else classify_title(header)
-
-        conn = get_connection()
-        conn.execute(
-            "INSERT OR IGNORE INTO companies (ticker, updated_at) VALUES (?, CURRENT_TIMESTAMP)",
-            (ticker,),
-        )
-        conn.execute(
-            """INSERT OR IGNORE INTO documents
-               (id, company_ticker, doc_type, header, original_filename, announcement_date, url, local_path, parse_status)
-               VALUES (?, ?, ?, ?, ?, NULL, '', ?, 'pending')""",
-            (doc_id, ticker, doc_type, header, filename, rel_path),
-        )
-        conn.commit()
-        conn.close()
-
-        uploaded.append({"filename": filename, "doc_id": doc_id, "doc_type": doc_type})
-
-    if not uploaded and not skipped_dupes:
-        return jsonify({"error": "No valid PDF files"}), 400
-
-    if not uploaded and skipped_dupes:
-        return jsonify({
-            "status": "skipped",
-            "message": f"All {len(skipped_dupes)} file(s) already uploaded",
-            "duplicates": skipped_dupes,
-        }), 409
-
-    # Run pipeline in background for this ticker
-    _start_pipeline(ticker)
-
-    response = {
-        "status": "processing",
-        "ticker": ticker,
-        "files": uploaded,
-    }
-    if skipped_dupes:
-        response["duplicates"] = skipped_dupes
-    return jsonify(response)
-
-
-@app.route("/api/parse", methods=["POST"])
-def api_parse():
-    ticker = request.json.get("ticker") if request.is_json else None
-    _start_pipeline(ticker)
-    return jsonify({"status": "started", "ticker": ticker or "all"})
-
-
-@app.route("/api/cleanup-pdfs", methods=["POST"])
-def api_cleanup_pdfs():
-    """Delete all PDFs that have already been parsed (status != pending)."""
-    conn = get_connection()
-    docs = conn.execute(
-        "SELECT id, local_path FROM documents WHERE local_path IS NOT NULL AND local_path != '' AND parse_status != 'pending'"
-    ).fetchall()
-    conn.close()
-
-    deleted = 0
-    freed_bytes = 0
-    for doc in docs:
-        p = Path(doc["local_path"])
-        pdf_path = p if p.is_absolute() else RAW_DIR.parent.parent / p
-        if pdf_path.exists():
-            freed_bytes += pdf_path.stat().st_size
-            pdf_path.unlink()
-            deleted += 1
-            # Clean up empty dirs
-            parent = pdf_path.parent
-            if parent.exists() and not any(parent.iterdir()):
-                parent.rmdir()
-
-    freed_mb = round(freed_bytes / (1024 * 1024), 1)
-    logger.info(f"Cleaned up {deleted} PDFs, freed {freed_mb} MB")
-    return jsonify({"deleted": deleted, "freed_mb": freed_mb})
-
-
-@app.route("/api/cleanup-orphans", methods=["POST"])
-def api_cleanup_orphans():
-    """Delete documents that have no URL and no accessible local file (orphans from old uploads)."""
-    conn = get_connection()
-    docs = conn.execute(
-        "SELECT id, local_path FROM documents WHERE parse_status IN ('failed', 'needs_review')"
-    ).fetchall()
-
-    removed = 0
-    for doc in docs:
-        local = doc["local_path"]
-        # Remove if no local file exists (orphaned after volume cleanup or stateless ingest)
-        local_exists = local and Path(local).exists()
-        if not local_exists:
-            conn.execute("DELETE FROM staging_extractions WHERE document_id = ?", (doc["id"],))
-            conn.execute("DELETE FROM drill_results WHERE source_doc_id = ?", (doc["id"],))
-            conn.execute("DELETE FROM documents WHERE id = ?", (doc["id"],))
-            removed += 1
-
-    conn.commit()
-    conn.close()
-    logger.info(f"Removed {removed} orphan documents")
-    return jsonify({"removed": removed})
-
-
 @app.route("/api/ingest", methods=["POST"])
 def api_ingest():
     """
-    Fetch announcements from ASX API and parse in-memory (no disk writes).
-    Body: { "tickers": ["SXG", "WWI"], "count": 50 }
-    Falls back to pilot_tickers.txt if no tickers provided.
+    Fetch announcements from ASX API and run orchestrator.
+    Body: { "tickers": ["DEG", "WAF"], "count": 50 }
     """
     data = request.get_json(silent=True) or {}
     tickers = data.get("tickers", [])
     count = data.get("count", 50)
 
     if not tickers:
-        # Fall back to pilot_tickers.txt
+        from pathlib import Path
         pilot_path = Path(__file__).resolve().parent / "pilot_tickers.txt"
         if pilot_path.exists():
             tickers = [
@@ -424,13 +88,19 @@ def api_ingest():
     return jsonify({"status": "started", "tickers": tickers, "count": count})
 
 
+@app.route("/api/orchestrate", methods=["POST"])
+def api_orchestrate():
+    """Run the orchestrator on all pending/classified docs."""
+    _start_orchestrate()
+    return jsonify({"status": "started"})
+
+
 def _start_ingest(tickers, count):
-    """Reset status and launch ingest in background thread."""
     global pipeline_status
     pipeline_status = {
         "running": True,
         "ticker": ", ".join(t.upper() for t in tickers),
-        "phase": "fetching",
+        "phase": "polling",
         "current_doc": None,
         "docs_total": 0,
         "docs_done": 0,
@@ -438,68 +108,40 @@ def _start_ingest(tickers, count):
         "error": None,
         "failed_count": 0,
     }
-
-    def run():
-        _run_ingest_tracked(tickers, count)
-
-    thread = threading.Thread(target=run, daemon=True)
+    thread = threading.Thread(target=_run_ingest, args=(tickers, count), daemon=True)
     thread.start()
 
 
-def _run_ingest_tracked(tickers, count):
-    """Run ASX ingest with progress tracking."""
+def _run_ingest(tickers, count):
     global pipeline_status
     try:
-        from pipeline.asx_fetcher import ingest_tickers
-        from pipeline.normalizer import normalize_document_extractions
-        from pipeline.loader import load_document
+        from ingest.asx_poller import poll_tickers
+        from pipeline.orchestrator import run_orchestrator
 
-        init_db()
+        # Phase 1: Poll ASX
+        pipeline_status["phase"] = "polling"
+        poll_tickers(tickers, count=count, status=pipeline_status)
 
-        # Phase 1: Fetch and parse
-        pipeline_status["phase"] = "fetching"
-        ingest_tickers(tickers, count=count, status=pipeline_status)
+        # Phase 2: Classify + Extract + Normalize
+        pipeline_status["phase"] = "processing"
+        run_orchestrator()
 
-        # Phase 2: Normalize
-        pipeline_status["phase"] = "normalizing"
-        pipeline_status["current_doc"] = None
-        conn = get_connection()
-        to_normalize = conn.execute(
-            "SELECT DISTINCT document_id FROM staging_extractions WHERE normalized_value IS NULL"
-        ).fetchall()
-        conn.close()
-        for row in to_normalize:
-            normalize_document_extractions(row["document_id"])
-
-        # Phase 3: Load
-        pipeline_status["phase"] = "loading"
-        conn = get_connection()
-        done_docs = conn.execute("SELECT id FROM documents WHERE parse_status = 'done'").fetchall()
-        conn.close()
-        for row in done_docs:
-            try:
-                load_document(row["id"])
-            except Exception as e:
-                logger.error("Loader error on %s: %s", row["id"], e)
-
-        failed_count = pipeline_status.get("failed_count", 0)
-        pipeline_status["phase"] = "done_with_errors" if failed_count > 0 else "done"
+        failed = pipeline_status.get("failed_count", 0)
+        pipeline_status["phase"] = "done_with_errors" if failed > 0 else "done"
         pipeline_status["running"] = False
-        logger.info(f"Ingest completed (failures: {failed_count})")
     except Exception:
         pipeline_status["phase"] = "error"
         pipeline_status["error"] = traceback.format_exc().split("\n")[-2]
         pipeline_status["running"] = False
-        logger.error(f"Ingest failed:\n{traceback.format_exc()}")
+        logger.error("Ingest failed:\n%s", traceback.format_exc())
 
 
-def _start_pipeline(ticker):
-    """Reset status immediately (before thread starts) and launch pipeline."""
+def _start_orchestrate():
     global pipeline_status
     pipeline_status = {
         "running": True,
-        "ticker": ticker or "all",
-        "phase": "registering",
+        "ticker": "all",
+        "phase": "processing",
         "current_doc": None,
         "docs_total": 0,
         "docs_done": 0,
@@ -507,30 +149,23 @@ def _start_pipeline(ticker):
         "error": None,
         "failed_count": 0,
     }
-
-    def run_parse():
-        _run_pipeline_tracked(ticker)
-
-    thread = threading.Thread(target=run_parse, daemon=True)
+    thread = threading.Thread(target=_run_orchestrate, daemon=True)
     thread.start()
 
 
-def _run_pipeline_tracked(ticker):
-    """Run pipeline with progress tracking."""
+def _run_orchestrate():
     global pipeline_status
     try:
-        logger.info(f"Starting pipeline for {ticker or 'all'}")
-        from parse import run_pipeline_tracked
-        run_pipeline_tracked(ticker, pipeline_status)
-        failed_count = pipeline_status.get("failed_count", 0)
-        pipeline_status["phase"] = "done_with_errors" if failed_count > 0 else "done"
+        from pipeline.orchestrator import run_orchestrator
+        stats = run_orchestrator()
+        pipeline_status["phase"] = "done"
         pipeline_status["running"] = False
-        logger.info(f"Pipeline completed for {ticker or 'all'} (failures: {failed_count})")
+        logger.info("Orchestrator done: %s", stats)
     except Exception:
         pipeline_status["phase"] = "error"
         pipeline_status["error"] = traceback.format_exc().split("\n")[-2]
         pipeline_status["running"] = False
-        logger.error(f"Pipeline failed for {ticker or 'all'}:\n{traceback.format_exc()}")
+        logger.error("Orchestrator failed:\n%s", traceback.format_exc())
 
 
 if __name__ == "__main__":

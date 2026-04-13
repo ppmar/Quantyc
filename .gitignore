@@ -1,5 +1,7 @@
 data/raw/
 data/staging.db
+db/quantyc.db
+db/_documents_backup.json
 .env
 CLAUDE.md
 AGENTS.md
@@ -15,3 +17,4 @@ node_modules/
 .next/
 frontend/.next/
 frontend/node_modules/
+refactor.md

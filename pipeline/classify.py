@@ -64,10 +64,11 @@ HEADLINE_KEYWORDS: list[tuple[str, list[str]]] = [
         "quarter financials",
         "march quarter", "june quarter",
         "september quarter", "december quarter",
+        "first quarter", "second quarter", "third quarter", "fourth quarter",
     ]),
     ("presentation", [
         "investor presentation", "corporate presentation",
-        "investor update", "presentation",
+        "investor update", "corporate update", "presentation",
     ]),
 ]
 

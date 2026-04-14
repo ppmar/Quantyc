@@ -13,7 +13,9 @@ import os
 import threading
 import time
 import traceback
+from pathlib import Path
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -166,6 +168,90 @@ def _run_orchestrate():
         pipeline_status["error"] = traceback.format_exc().split("\n")[-2]
         pipeline_status["running"] = False
         logger.error("Orchestrator failed:\n%s", traceback.format_exc())
+
+
+# ---------------------------------------------------------------------------
+# Scheduled auto-ingest
+# ---------------------------------------------------------------------------
+
+SCHEDULE_INTERVAL_HOURS = int(os.environ.get("INGEST_INTERVAL_HOURS", "24"))
+SCHEDULE_ENABLED = os.environ.get("INGEST_SCHEDULE", "1") == "1"
+
+scheduler = BackgroundScheduler(daemon=True)
+
+
+def _load_pilot_tickers() -> list[str]:
+    pilot_path = Path(__file__).resolve().parent / "pilot_tickers.txt"
+    if not pilot_path.exists():
+        return []
+    return [
+        line.strip() for line in pilot_path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+
+def _scheduled_ingest():
+    """Called by APScheduler on interval."""
+    if pipeline_status.get("running"):
+        logger.info("Scheduled ingest skipped — pipeline already running")
+        return
+    tickers = _load_pilot_tickers()
+    if not tickers:
+        logger.warning("Scheduled ingest skipped — no tickers in pilot_tickers.txt")
+        return
+    logger.info("Scheduled ingest starting for %d tickers", len(tickers))
+    _start_ingest(tickers, 50)
+
+
+if SCHEDULE_ENABLED:
+    scheduler.add_job(
+        _scheduled_ingest,
+        "interval",
+        hours=SCHEDULE_INTERVAL_HOURS,
+        id="auto_ingest",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("Auto-ingest scheduled every %dh", SCHEDULE_INTERVAL_HOURS)
+
+
+@app.route("/api/schedule")
+def api_schedule():
+    """Get schedule status."""
+    job = scheduler.get_job("auto_ingest")
+    return jsonify({
+        "enabled": job is not None,
+        "interval_hours": SCHEDULE_INTERVAL_HOURS,
+        "next_run": str(job.next_run_time) if job else None,
+        "tickers": _load_pilot_tickers(),
+    })
+
+
+@app.route("/api/schedule/toggle", methods=["POST"])
+def api_schedule_toggle():
+    """Enable or disable the scheduled ingest."""
+    job = scheduler.get_job("auto_ingest")
+    if job:
+        scheduler.remove_job("auto_ingest")
+        return jsonify({"enabled": False})
+    else:
+        scheduler.add_job(
+            _scheduled_ingest,
+            "interval",
+            hours=SCHEDULE_INTERVAL_HOURS,
+            id="auto_ingest",
+            replace_existing=True,
+        )
+        return jsonify({"enabled": True, "interval_hours": SCHEDULE_INTERVAL_HOURS})
+
+
+@app.route("/api/schedule/run", methods=["POST"])
+def api_schedule_run_now():
+    """Trigger an immediate ingest run (same as scheduled)."""
+    if pipeline_status.get("running"):
+        return jsonify({"error": "Pipeline already running"}), 409
+    _scheduled_ingest()
+    return jsonify({"status": "started"})
 
 
 if __name__ == "__main__":

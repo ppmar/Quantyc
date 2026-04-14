@@ -110,7 +110,7 @@ def extract_classified() -> dict:
                 _mark_failed(doc_id, "extraction_empty")
                 stats["failed"] += 1
 
-        elif doc_type == "presentation":
+        elif doc_type in ("presentation", "quarterly_activity"):
             pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
             if not pdf_bytes:
                 _mark_failed(doc_id, "download_failed")

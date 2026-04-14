@@ -41,7 +41,7 @@ def _extract_and_normalize(doc_id: int, doc_type: str, pdf_bytes: bytes) -> str:
             return "parsed"
         return "extraction_empty"
 
-    elif doc_type == "presentation":
+    elif doc_type in ("presentation", "quarterly_activity"):
         result = extract_presentation(doc_id, pdf_bytes)
         if result:
             normalize_from_presentation(doc_id)

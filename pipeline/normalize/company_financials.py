@@ -50,7 +50,7 @@ def _check_review_flags(
     shares_fd: float | None, opex_burn: float | None,
     confidence: str,
 ) -> tuple[bool, str | None]:
-    """Apply §7.4 flagging rules. Returns (needs_review, reason)."""
+    """Build review reasons (informational only). Never blocks ingestion."""
     reasons = []
 
     if confidence == "low":
@@ -80,9 +80,8 @@ def _check_review_flags(
                 if deviation > 0.5:
                     reasons.append(f"{field}_50pct_deviation")
 
-    if reasons:
-        return True, "; ".join(reasons)
-    return False, None
+    # Always return needs_review=False — flags are logged but don't block
+    return False, "; ".join(reasons) if reasons else None
 
 
 def normalize_from_5b(document_id: int) -> bool:

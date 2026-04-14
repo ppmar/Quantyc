@@ -102,6 +102,25 @@ CREATE TABLE IF NOT EXISTS _stg_issue_of_securities (
 );
 
 -- ─────────────────────────────────────────────────────────────
+-- Staging table for presentation / corporate update extraction
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS _stg_presentation (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id        INTEGER NOT NULL REFERENCES documents(document_id),
+    effective_date     TEXT,
+    shares_basic       REAL,
+    shares_fd          REAL,
+    options_outstanding REAL,
+    perf_rights_outstanding REAL,
+    cash               REAL,
+    debt               REAL,
+    raw_json           TEXT,
+    extraction_method  TEXT    NOT NULL DEFAULT 'rule',
+    created_at         TEXT    NOT NULL,
+    UNIQUE(document_id)
+);
+
+-- ─────────────────────────────────────────────────────────────
 -- Placeholders for later weeks — create empty tables only.
 -- Do not populate. Do not extract into them yet.
 -- ─────────────────────────────────────────────────────────────

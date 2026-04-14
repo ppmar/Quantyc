@@ -235,3 +235,78 @@ def normalize_from_securities(document_id: int) -> bool:
     logger.info("Normalized securities for %s doc %d: basic=%s, fd=%s, opts=%s",
                 ticker, document_id, shares_basic, shares_fd, options_outstanding)
     return True
+
+
+def normalize_from_presentation(document_id: int) -> bool:
+    """
+    Normalize presentation staging row into company_financials.
+    Presentations typically have shares, cash, and sometimes debt.
+    """
+    conn = get_connection()
+
+    if _already_normalized(conn, document_id):
+        logger.info("Doc %d already normalized, skipping", document_id)
+        conn.close()
+        return True
+
+    stg = conn.execute(
+        "SELECT * FROM _stg_presentation WHERE document_id = ?", (document_id,)
+    ).fetchone()
+
+    if not stg:
+        conn.close()
+        return False
+
+    doc = conn.execute(
+        "SELECT ticker, announcement_date FROM documents WHERE document_id = ?", (document_id,)
+    ).fetchone()
+
+    if not doc:
+        conn.close()
+        return False
+
+    ticker = doc["ticker"]
+    company_id = _get_or_create_company(conn, ticker)
+
+    effective_date = stg["effective_date"] or doc["announcement_date"] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    announcement_date = doc["announcement_date"] or effective_date
+
+    shares_basic = stg["shares_basic"]
+    shares_fd = stg["shares_fd"]
+    options = stg["options_outstanding"]
+    perf_rights = stg["perf_rights_outstanding"]
+    cash = stg["cash"]
+    debt = stg["debt"]
+
+    # If FD not given but basic is, compute it
+    if shares_fd is None and shares_basic is not None:
+        shares_fd = shares_basic + (options or 0) + (perf_rights or 0)
+
+    confidence = "medium"  # presentations are less precise than filings
+    needs_review, review_reason = _check_review_flags(
+        conn, company_id, cash, shares_fd, None, confidence
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    conn.execute(
+        """INSERT INTO company_financials
+           (company_id, document_id, effective_date, announcement_date,
+            shares_basic, shares_fd, options_outstanding, perf_rights_outstanding,
+            cash, debt,
+            extraction_method, confidence, needs_review, review_reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rule', ?, ?, ?, ?)""",
+        (
+            company_id, document_id, effective_date, announcement_date,
+            shares_basic, shares_fd, options, perf_rights,
+            cash, debt,
+            confidence, 1 if needs_review else 0, review_reason, now,
+        ),
+    )
+
+    conn.commit()
+    conn.close()
+
+    logger.info("Normalized presentation for %s doc %d: basic=%s, fd=%s, cash=%s",
+                ticker, document_id, shares_basic, shares_fd, cash)
+    return True

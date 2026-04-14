@@ -60,7 +60,8 @@ def extract_classified() -> dict:
     from ingest.asx_poller import fetch_pdf_bytes
     from pipeline.extractors.appendix_5b import extract_appendix_5b
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
-    from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities
+    from pipeline.extractors.presentation import extract_presentation
+    from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities, normalize_from_presentation
 
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
@@ -108,6 +109,30 @@ def extract_classified() -> dict:
             else:
                 _mark_failed(doc_id, "extraction_empty")
                 stats["failed"] += 1
+
+        elif doc_type == "presentation":
+            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
+            if not pdf_bytes:
+                _mark_failed(doc_id, "download_failed")
+                stats["failed"] += 1
+                continue
+
+            result = extract_presentation(doc_id, pdf_bytes)
+            del pdf_bytes
+            if result:
+                normalize_from_presentation(doc_id)
+                _mark_parsed(doc_id)
+                stats["extracted"] += 1
+            else:
+                # No capital structure data found — not a failure, just skip
+                conn = get_connection()
+                conn.execute(
+                    "UPDATE documents SET parse_status = 'skipped' WHERE document_id = ?",
+                    (doc_id,),
+                )
+                conn.commit()
+                conn.close()
+                stats["skipped"] += 1
 
         else:
             # Not handled in Week 2 — skip

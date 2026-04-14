@@ -1,19 +1,35 @@
 "use client";
 
-import { useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Download } from "lucide-react";
+import { Download, Play, RefreshCw } from "lucide-react";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const COUNT_OPTIONS = [5, 10, 20, 50];
+
+interface ScheduleInfo {
+  enabled: boolean;
+  interval_hours: number;
+  next_run: string | null;
+  tickers: string[];
+}
 
 export function IngestPanel() {
   const [ticker, setTicker] = useState("");
   const [count, setCount] = useState(10);
   const [loading, setLoading] = useState(false);
+  const [runAllLoading, setRunAllLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [showPanel, setShowPanel] = useState(false);
+  const [schedule, setSchedule] = useState<ScheduleInfo | null>(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/schedule`)
+      .then((r) => r.json())
+      .then(setSchedule)
+      .catch(() => {});
+  }, []);
 
   const handleIngest = async () => {
     const tickers = ticker
@@ -26,9 +42,14 @@ export function IngestPanel() {
     setLoading(true);
     setMessage(null);
     try {
-      const res = await api.ingest(tickers, count);
-      if (res.error) {
-        setMessage(res.error);
+      const res = await fetch(`${API_BASE}/api/ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tickers, count }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage(data.error);
       } else {
         setMessage(`Ingest started for ${tickers.join(", ")} (last ${count})`);
         setTicker("");
@@ -40,6 +61,27 @@ export function IngestPanel() {
     }
   };
 
+  const handleRunAll = async () => {
+    setRunAllLoading(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/schedule/run`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMessage(data.error);
+      } else {
+        const tickers = schedule?.tickers?.join(", ") || "all pilot tickers";
+        setMessage(`Ingest started for ${tickers}`);
+      }
+    } catch {
+      setMessage("Failed to start ingest");
+    } finally {
+      setRunAllLoading(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -48,12 +90,28 @@ export function IngestPanel() {
             <Download className="h-4 w-4" />
             ASX Ingest
           </CardTitle>
-          <button
-            onClick={() => setShowPanel(!showPanel)}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {showPanel ? "Hide" : "Show"}
-          </button>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={handleRunAll}
+              disabled={runAllLoading || loading}
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs gap-1"
+            >
+              {runAllLoading ? (
+                <RefreshCw className="h-3 w-3 animate-spin" />
+              ) : (
+                <Play className="h-3 w-3" />
+              )}
+              Run All
+            </Button>
+            <button
+              onClick={() => setShowPanel(!showPanel)}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showPanel ? "Hide" : "Show"}
+            </button>
+          </div>
         </div>
       </CardHeader>
       {showPanel && (
@@ -86,10 +144,18 @@ export function IngestPanel() {
               {loading ? "Starting..." : "Fetch"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Fetches announcements from ASX, downloads PDFs into memory, and
-            parses relevant documents. Free API returns up to 5 most recent.
-          </p>
+          {schedule && (
+            <div className="text-xs text-muted-foreground space-y-0.5">
+              <p>
+                Auto-ingest: {schedule.enabled ? "on" : "off"} — every{" "}
+                {schedule.interval_hours}h
+              </p>
+              <p>Tickers: {schedule.tickers.join(", ") || "none"}</p>
+              {schedule.next_run && (
+                <p>Next run: {new Date(schedule.next_run).toLocaleString()}</p>
+              )}
+            </div>
+          )}
           {message && (
             <p className="text-xs text-yellow-400">{message}</p>
           )}

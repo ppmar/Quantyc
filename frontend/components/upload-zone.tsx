@@ -4,20 +4,23 @@ import { useState, useCallback, useRef } from "react";
 import { Upload, FileText, CheckCircle2, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
 const DOC_TYPES = [
   { value: "auto", label: "Auto-detect" },
   { value: "appendix_5b", label: "Appendix 5B" },
-  { value: "resource_update", label: "Resource / Reserve Update" },
-  { value: "drill_results", label: "Drill Results" },
-  { value: "study", label: "Study (Scoping / PFS / DFS)" },
-  { value: "capital_raise", label: "Capital Raise" },
-  { value: "quarterly_report", label: "Quarterly Report" },
+  { value: "issue_of_securities", label: "Issue of Securities" },
+  { value: "quarterly_activity", label: "Quarterly Activity" },
   { value: "annual_report", label: "Annual Report" },
+  { value: "half_year_report", label: "Half Year Report" },
+  { value: "resource_update", label: "Resource Update" },
+  { value: "placement", label: "Placement / Capital Raise" },
+  { value: "presentation", label: "Presentation" },
 ];
 
 interface UploadResult {
   filename: string;
-  doc_id: string;
+  document_id: number;
   doc_type: string;
 }
 
@@ -67,7 +70,7 @@ export function UploadZone({ onComplete }: UploadZoneProps) {
     files.forEach((f) => formData.append("files", f));
 
     try {
-      const res = await fetch("/api/upload", {
+      const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
         body: formData,
       });
@@ -217,7 +220,7 @@ export function UploadZone({ onComplete }: UploadZoneProps) {
             {results.length} file{results.length > 1 ? "s" : ""} uploaded — pipeline running
           </div>
           {results.map((r) => (
-            <div key={r.doc_id} className="text-xs text-muted-foreground flex items-center gap-2">
+            <div key={r.document_id} className="text-xs text-muted-foreground flex items-center gap-2">
               <span className="font-mono">{r.filename}</span>
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
                 {r.doc_type}

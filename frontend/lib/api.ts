@@ -11,155 +11,121 @@ async function fetchAPI<T>(path: string): Promise<T> {
 export interface Stats {
   companies: number;
   documents: number;
-  docs_done: number;
+  docs_parsed: number;
   docs_pending: number;
+  docs_classified: number;
   docs_failed: number;
-  staging_rows: number;
-  needs_review: number;
-  resources: number;
   financials: number;
-  studies: number;
-  drill_intercepts: number;
-  drill_holes: number;
+  needs_review: number;
 }
 
 export interface Company {
   ticker: string;
   name: string | null;
-  primary_commodity: string | null;
+  reporting_currency: string;
   doc_count: number;
   parsed_count: number;
-  stage: string | null;
-  cash: number | null;
-  runway: number | null;
 }
 
 export interface Document {
-  id: string;
-  company_ticker: string;
+  document_id: number;
+  ticker: string;
   doc_type: string;
   header: string | null;
   announcement_date: string | null;
   url: string;
-  local_path: string;
   parse_status: string;
+  ingested_at: string;
+}
+
+export interface CompanyFinancial {
+  financial_id: number;
+  company_id: number;
+  document_id: number;
+  effective_date: string;
+  announcement_date: string;
+  shares_basic: number | null;
+  shares_fd: number | null;
+  options_outstanding: number | null;
+  perf_rights_outstanding: number | null;
+  convertibles_face_value: number | null;
+  cash: number | null;
+  debt: number | null;
+  quarterly_opex_burn: number | null;
+  quarterly_invest_burn: number | null;
+  extraction_method: string;
+  confidence: string;
+  needs_review: number;
+  review_reason: string | null;
+  reviewed_at: string | null;
   created_at: string;
 }
 
-export interface Resource {
-  id: number;
-  project_id: string;
-  commodity: string;
-  effective_date: string | null;
-  estimate_type: string;
-  category: string;
-  tonnes_mt: number | null;
-  grade: number | null;
-  grade_unit: string | null;
-  contained_metal: number | null;
-  contained_unit: string | null;
-  attributable_contained: number | null;
-  project_name: string | null;
-}
-
-export interface Study {
-  id: number;
-  project_id: string;
-  study_stage: string | null;
-  study_date: string | null;
-  mine_life_years: number | null;
-  annual_production: number | null;
-  production_unit: string | null;
-  recovery_pct: number | null;
-  initial_capex_musd: number | null;
-  sustaining_capex_musd: number | null;
-  opex_per_unit: number | null;
-  opex_unit: string | null;
-  post_tax_npv_musd: number | null;
-  irr_pct: number | null;
-  assumed_commodity_price: number | null;
-  assumed_price_unit: string | null;
-  project_name: string | null;
-}
-
-export interface DrillResult {
-  hole_id: string;
-  from_m: number | null;
-  to_m: number | null;
-  interval_m: number | null;
-  au_gt: number | null;
-  au_eq_gt: number | null;
-  sb_pct: number | null;
-  is_including: boolean;
-}
-
-export interface Valuation {
+export interface FinancialsResponse {
   ticker: string;
-  stage: string;
-  method: string;
-  ev_aud: number | null;
-  nav_aud: number | null;
-  nav_per_share: number | null;
-  ev_per_resource_unit: number | null;
-  resource_unit: string | null;
-  total_attributable_resource: number | null;
+  latest: CompanyFinancial & { name: string | null; reporting_currency: string };
+  history: CompanyFinancial[];
+}
+
+export interface ReviewItem {
+  financial_id: number;
+  ticker: string;
+  effective_date: string;
+  shares_basic: number | null;
   shares_fd: number | null;
-  cash_aud: number | null;
-  debt_aud: number | null;
-  red_flags: string[];
+  cash: number | null;
+  debt: number | null;
+  quarterly_opex_burn: number | null;
+  extraction_method: string;
+  confidence: string;
+  review_reason: string | null;
+  url: string;
+  header: string | null;
 }
 
-export interface RedFlag {
-  ticker: string;
-  flag_type: string;
-  description: string;
-}
-
-export interface ReviewData {
-  staging: Array<Record<string, unknown>>;
-  financials: Array<Record<string, unknown>>;
-  resources: Array<Record<string, unknown>>;
-  studies: Array<Record<string, unknown>>;
-  failed_docs: Array<Record<string, unknown>>;
-  red_flags: RedFlag[];
-}
-
-export interface CompanyDetail {
-  company: Record<string, unknown>;
-  financials: Array<Record<string, unknown>>;
-  projects: Array<Record<string, unknown>>;
-  resources: Resource[];
-  studies: Study[];
-  documents: Document[];
-  drill_results: DrillResult[];
-  valuation: Valuation | null;
+export interface PipelineStatus {
+  running: boolean;
+  ticker: string | null;
+  phase: string | null;
+  current_doc: string | null;
+  docs_total: number;
+  docs_done: number;
+  started_at: number | null;
+  error: string | null;
+  failed_count: number;
 }
 
 export const api = {
   stats: () => fetchAPI<Stats>("/api/stats"),
   companies: () => fetchAPI<Company[]>("/api/companies"),
-  company: (ticker: string) => fetchAPI<CompanyDetail>(`/api/company/${ticker}`),
-  documents: (params?: { status?: string; type?: string }) => {
+  documents: (params?: { status?: string; type?: string; ticker?: string }) => {
     const search = new URLSearchParams();
     if (params?.status) search.set("status", params.status);
     if (params?.type) search.set("type", params.type);
+    if (params?.ticker) search.set("ticker", params.ticker);
     const qs = search.toString();
     return fetchAPI<Document[]>(`/api/documents${qs ? `?${qs}` : ""}`);
   },
-  valuations: () => fetchAPI<Valuation[]>("/api/valuations"),
-  review: () => fetchAPI<ReviewData>("/api/review"),
-  resources: (ticker: string) => fetchAPI<Resource[]>(`/api/resources/${ticker}`),
-  drill: (ticker: string) => fetchAPI<DrillResult[]>(`/api/drill/${ticker}`),
-  parse: (ticker?: string) =>
-    fetch(`/api/parse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticker }),
-    }).then((r) => r.json()),
-  ingest: (tickers: string[], count: number = 10) =>
+  financials: (ticker: string) =>
+    fetchAPI<FinancialsResponse>(`/api/companies/${ticker}/financials`),
+  review: () => fetchAPI<ReviewItem[]>("/api/review"),
+  pipelineStatus: () => fetchAPI<PipelineStatus>("/api/pipeline/status"),
+  ingest: (tickers: string[], count: number = 20) =>
     fetch(`${API_BASE}/api/ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tickers, count }),
     }).then((r) => r.json()),
+  orchestrate: () =>
+    fetch(`${API_BASE}/api/orchestrate`, { method: "POST" }).then((r) =>
+      r.json()
+    ),
+  upload: (ticker: string, files: FileList) => {
+    const form = new FormData();
+    form.set("ticker", ticker);
+    Array.from(files).forEach((f) => form.append("files", f));
+    return fetch(`${API_BASE}/api/upload`, { method: "POST", body: form }).then(
+      (r) => r.json()
+    );
+  },
 };

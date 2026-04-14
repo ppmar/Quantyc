@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
 interface PipelineStatus {
   running: boolean;
   ticker: string | null;
@@ -40,7 +42,7 @@ export function PipelineProgress({ onComplete }: { onComplete?: () => void }) {
   useEffect(() => {
     const poll = async () => {
       try {
-        const res = await fetch("/api/pipeline/status");
+        const res = await fetch(`${API_BASE}/api/pipeline/status`);
         const data: PipelineStatus = await res.json();
         setStatus(data);
 

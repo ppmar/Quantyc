@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { api, type Document } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 
 const STATUS_STYLE: Record<string, string> = {
-  done: "bg-green-500/10 text-green-400 border-green-500/30",
+  parsed: "bg-green-500/10 text-green-400 border-green-500/30",
+  classified: "bg-blue-500/10 text-blue-400 border-blue-500/30",
   pending: "bg-yellow-500/10 text-yellow-400 border-yellow-500/30",
   failed: "bg-red-500/10 text-red-400 border-red-500/30",
-  needs_review: "bg-blue-500/10 text-blue-400 border-blue-500/30",
+  skipped: "bg-gray-500/10 text-gray-400 border-gray-500/30",
 };
 
 export default function DocumentsPage() {
@@ -80,7 +81,7 @@ export default function DocumentsPage() {
                   <th className="px-4 py-3 font-medium">Header</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Date</th>
-                  <th className="px-4 py-3 font-medium font-mono">ID</th>
+                  <th className="px-4 py-3 font-medium">Link</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
@@ -99,15 +100,15 @@ export default function DocumentsPage() {
                 ) : (
                   docs.map((doc) => (
                     <tr
-                      key={doc.id}
+                      key={doc.document_id}
                       className="hover:bg-muted/30 transition-colors"
                     >
                       <td className="px-4 py-2.5">
                         <Link
-                          href={`/company/${doc.company_ticker}`}
+                          href={`/company/${doc.ticker}`}
                           className="font-semibold font-mono text-primary hover:underline"
                         >
-                          {doc.company_ticker}
+                          {doc.ticker}
                         </Link>
                       </td>
                       <td className="px-4 py-2.5">
@@ -130,8 +131,19 @@ export default function DocumentsPage() {
                       <td className="px-4 py-2.5 text-muted-foreground font-mono text-xs">
                         {doc.announcement_date || "-"}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                        {doc.id.slice(0, 10)}...
+                      <td className="px-4 py-2.5">
+                        {doc.url && !doc.url.startsWith("upload://") ? (
+                          <a
+                            href={doc.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary hover:underline"
+                          >
+                            PDF
+                          </a>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
                       </td>
                     </tr>
                   ))

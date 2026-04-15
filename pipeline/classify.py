@@ -113,6 +113,42 @@ def classify_first_page(text: str) -> str | None:
     return None
 
 
+# Keywords that indicate a standardized ASX form anywhere in the PDF
+STANDARDIZED_FORM_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("appendix_5b", [
+        "appendix 5b", "quarterly cash flow report",
+        "mining exploration entity",
+    ]),
+    ("issue_of_securities", [
+        "appendix 3g", "appendix 2a",
+        "notification of issue, conversion or payment",
+        "application for quotation of securities",
+    ]),
+]
+
+
+def contains_standardized_form(pdf_bytes: bytes) -> str | None:
+    """Scan all pages for standardized ASX form signatures.
+
+    Returns the doc_type of the first standardized form found, or None.
+    Used to detect e.g. an Appendix 5B embedded at the end of a quarterly report.
+    """
+    import pdfplumber
+
+    try:
+        bio = io.BytesIO(pdf_bytes)
+        with pdfplumber.open(bio) as pdf:
+            for page in pdf.pages:
+                text = (page.extract_text() or "").lower()
+                for doc_type, keywords in STANDARDIZED_FORM_KEYWORDS:
+                    for kw in keywords:
+                        if kw in text:
+                            return doc_type
+    except Exception as e:
+        logger.warning("Could not scan PDF for standardized forms: %s", e)
+    return None
+
+
 def classify(
     headline: str | None = None,
     pdf_bytes: bytes | None = None,

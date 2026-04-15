@@ -11,7 +11,7 @@ import logging
 from flask import Blueprint, jsonify, request
 
 from ingest.manual_upload import handle_upload
-from pipeline.classify import classify
+from pipeline.classify import classify, contains_standardized_form
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,10 @@ def _extract_and_normalize(doc_id: int, doc_type: str, pdf_bytes: bytes) -> str:
         return "extraction_empty"
 
     else:
+        # Check if the PDF contains an embedded standardized form
+        found_type = contains_standardized_form(pdf_bytes)
+        if found_type:
+            return _extract_and_normalize(doc_id, found_type, pdf_bytes)
         return "skipped"
 
 

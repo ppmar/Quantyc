@@ -200,7 +200,7 @@ def _scheduled_ingest():
         logger.warning("Scheduled ingest skipped — no tickers in pilot_tickers.txt")
         return
     logger.info("Scheduled ingest starting for %d tickers", len(tickers))
-    _start_ingest(tickers, 50)
+    _start_ingest(tickers, 20)
 
 
 if SCHEDULE_ENABLED:

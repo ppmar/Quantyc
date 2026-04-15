@@ -60,20 +60,10 @@ def extract_classified() -> dict:
     from ingest.asx_poller import fetch_pdf_bytes
     from pipeline.extractors.appendix_5b import extract_appendix_5b
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
-    from pipeline.extractors.narrative import extract_narrative
-    from pipeline.extractors.presentation import extract_presentation
-    from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities, normalize_from_presentation
+    from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities
 
-    # Doc types that are never worth downloading (no financial data)
-    SKIP_TYPES = set()
-    # Headlines that are never worth extracting
-    SKIP_HEADLINES = [
-        "ceasing to be a substantial holder",
-        "change in substantial holding",
-        "cleansing notice",
-        "change of director",
-        "granting of asx waiver",
-    ]
+    # Only process standardized ASX form types
+    SUPPORTED_TYPES = {"appendix_5b", "issue_of_securities"}
 
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
@@ -87,21 +77,19 @@ def extract_classified() -> dict:
         doc_id = doc["document_id"]
         doc_type = doc["doc_type"]
         url = doc["url"]
-        header = (doc["header"] or "").lower()
 
-        # Skip docs that definitely have no financial data
-        if any(skip in header for skip in SKIP_HEADLINES):
+        if doc_type not in SUPPORTED_TYPES:
             _mark_skipped(doc_id)
             stats["skipped"] += 1
             continue
 
-        if doc_type == "appendix_5b":
-            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
-            if not pdf_bytes:
-                _mark_failed(doc_id, "download_failed")
-                stats["failed"] += 1
-                continue
+        pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
+        if not pdf_bytes:
+            _mark_failed(doc_id, "download_failed")
+            stats["failed"] += 1
+            continue
 
+        if doc_type == "appendix_5b":
             result = extract_appendix_5b(doc_id, pdf_bytes)
             del pdf_bytes
             if result:
@@ -113,12 +101,6 @@ def extract_classified() -> dict:
                 stats["failed"] += 1
 
         elif doc_type == "issue_of_securities":
-            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
-            if not pdf_bytes:
-                _mark_failed(doc_id, "download_failed")
-                stats["failed"] += 1
-                continue
-
             result = extract_issue_of_securities(doc_id, pdf_bytes)
             del pdf_bytes
             if result:
@@ -128,45 +110,6 @@ def extract_classified() -> dict:
             else:
                 _mark_failed(doc_id, "extraction_empty")
                 stats["failed"] += 1
-
-        elif doc_type in ("presentation", "quarterly_activity"):
-            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
-            if not pdf_bytes:
-                _mark_failed(doc_id, "download_failed")
-                stats["failed"] += 1
-                continue
-
-            # Try rule-based first, then LLM fallback
-            result = extract_presentation(doc_id, pdf_bytes)
-            if not result:
-                result = extract_narrative(doc_id, pdf_bytes)
-            del pdf_bytes
-
-            if result:
-                normalize_from_presentation(doc_id)
-                _mark_parsed(doc_id)
-                stats["extracted"] += 1
-            else:
-                _mark_skipped(doc_id)
-                stats["skipped"] += 1
-
-        else:
-            # Try LLM extraction on any remaining doc type
-            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
-            if not pdf_bytes:
-                _mark_skipped(doc_id)
-                stats["skipped"] += 1
-                continue
-
-            result = extract_narrative(doc_id, pdf_bytes)
-            del pdf_bytes
-            if result:
-                normalize_from_presentation(doc_id)
-                _mark_parsed(doc_id)
-                stats["extracted"] += 1
-            else:
-                _mark_skipped(doc_id)
-                stats["skipped"] += 1
 
     logger.info("Extraction: %s", stats)
     return stats

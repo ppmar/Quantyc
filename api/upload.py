@@ -19,13 +19,14 @@ bp = Blueprint("upload", __name__)
 
 
 def _extract_and_normalize(doc_id: int, doc_type: str, pdf_bytes: bytes) -> str:
-    """Run the matching extractor + normalizer. Returns outcome string."""
+    """Run the matching extractor + normalizer. Returns outcome string.
+
+    Only processes standardized ASX form types (appendix_5b, issue_of_securities).
+    """
     from pipeline.extractors.appendix_5b import extract_appendix_5b
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
-    from pipeline.extractors.narrative import extract_narrative
-    from pipeline.extractors.presentation import extract_presentation
     from pipeline.normalize.company_financials import (
-        normalize_from_5b, normalize_from_securities, normalize_from_presentation,
+        normalize_from_5b, normalize_from_securities,
     )
 
     if doc_type == "appendix_5b":
@@ -42,22 +43,7 @@ def _extract_and_normalize(doc_id: int, doc_type: str, pdf_bytes: bytes) -> str:
             return "parsed"
         return "extraction_empty"
 
-    elif doc_type in ("presentation", "quarterly_activity"):
-        # Rule-based first, LLM fallback
-        result = extract_presentation(doc_id, pdf_bytes)
-        if not result:
-            result = extract_narrative(doc_id, pdf_bytes)
-        if result:
-            normalize_from_presentation(doc_id)
-            return "parsed"
-        return "skipped"
-
     else:
-        # Try LLM on any other doc type
-        result = extract_narrative(doc_id, pdf_bytes)
-        if result:
-            normalize_from_presentation(doc_id)
-            return "parsed"
         return "skipped"
 
 

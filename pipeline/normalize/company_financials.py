@@ -11,7 +11,6 @@ Sets needs_review=1 if:
     - any of shares_fd, cash, quarterly_opex_burn is null
     - two filings share the same effective_date with conflicting values
     - extracted value differs by >50% from prior snapshot
-    - confidence='low'
 """
 
 import logging
@@ -48,13 +47,9 @@ def _already_normalized(conn, document_id: int) -> bool:
 def _check_review_flags(
     conn, company_id: int, cash: float | None,
     shares_fd: float | None, opex_burn: float | None,
-    confidence: str,
 ) -> tuple[bool, str | None]:
     """Build review reasons (informational only). Never blocks ingestion."""
     reasons = []
-
-    if confidence == "low":
-        reasons.append("low_confidence")
 
     if shares_fd is None:
         reasons.append("missing_shares_fd")
@@ -124,9 +119,8 @@ def normalize_from_5b(document_id: int) -> bool:
     opex_burn = stg["quarterly_opex_burn"]
     invest_burn = stg["quarterly_invest_burn"]
 
-    confidence = "high"  # rule-based 5B is always high
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, cash, None, opex_burn, confidence
+        conn, company_id, cash, None, opex_burn
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -135,12 +129,12 @@ def normalize_from_5b(document_id: int) -> bool:
         """INSERT INTO company_financials
            (company_id, document_id, effective_date, announcement_date,
             cash, debt, quarterly_opex_burn, quarterly_invest_burn,
-            extraction_method, confidence, needs_review, review_reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'rule', ?, ?, ?, ?)""",
+            needs_review, review_reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             company_id, document_id, effective_date, announcement_date,
             cash, debt, opex_burn, invest_burn,
-            confidence, 1 if needs_review else 0, review_reason, now,
+            1 if needs_review else 0, review_reason, now,
         ),
     )
 
@@ -200,9 +194,8 @@ def normalize_from_securities(document_id: int) -> bool:
     announcement_date = doc["announcement_date"] or effective_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     effective_date = effective_date or announcement_date
 
-    confidence = "high"
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, None, shares_fd, None, confidence
+        conn, company_id, None, shares_fd, None
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -211,12 +204,12 @@ def normalize_from_securities(document_id: int) -> bool:
         """INSERT INTO company_financials
            (company_id, document_id, effective_date, announcement_date,
             shares_basic, shares_fd, options_outstanding, perf_rights_outstanding,
-            extraction_method, confidence, needs_review, review_reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'rule', ?, ?, ?, ?)""",
+            needs_review, review_reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             company_id, document_id, effective_date, announcement_date,
             shares_basic, shares_fd, options_outstanding, perf_rights,
-            confidence, 1 if needs_review else 0, review_reason, now,
+            1 if needs_review else 0, review_reason, now,
         ),
     )
 
@@ -273,9 +266,8 @@ def normalize_from_presentation(document_id: int) -> bool:
     if shares_fd is None and shares_basic is not None:
         shares_fd = shares_basic + (options or 0) + (perf_rights or 0)
 
-    confidence = "medium"  # presentations are less precise than filings
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, cash, shares_fd, None, confidence
+        conn, company_id, cash, shares_fd, None
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -285,13 +277,13 @@ def normalize_from_presentation(document_id: int) -> bool:
            (company_id, document_id, effective_date, announcement_date,
             shares_basic, shares_fd, options_outstanding, perf_rights_outstanding,
             cash, debt,
-            extraction_method, confidence, needs_review, review_reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'rule', ?, ?, ?, ?)""",
+            needs_review, review_reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             company_id, document_id, effective_date, announcement_date,
             shares_basic, shares_fd, options, perf_rights,
             cash, debt,
-            confidence, 1 if needs_review else 0, review_reason, now,
+            1 if needs_review else 0, review_reason, now,
         ),
     )
 

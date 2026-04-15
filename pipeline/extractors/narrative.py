@@ -120,7 +120,7 @@ def extract_narrative(document_id: int, pdf_bytes: bytes) -> dict | None:
         logger.info("No financially relevant pages in doc %d", document_id)
         return None
 
-    result, confidence = extract_with_llm(
+    result, _confidence = extract_with_llm(
         doc_type="financial_narrative",
         page_texts=best_pages,
         target_fields=TARGET_FIELDS,
@@ -153,8 +153,8 @@ def extract_narrative(document_id: int, pdf_bytes: bytes) -> dict | None:
         """INSERT OR REPLACE INTO _stg_presentation
            (document_id, effective_date, shares_basic, shares_fd,
             options_outstanding, perf_rights_outstanding, cash, debt,
-            raw_json, extraction_method, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'llm', ?)""",
+            raw_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             document_id,
             cleaned.get("effective_date"),

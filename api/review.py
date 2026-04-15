@@ -20,7 +20,7 @@ def api_review_list():
         """SELECT cf.financial_id, cf.effective_date, cf.announcement_date,
                   cf.shares_basic, cf.shares_fd, cf.options_outstanding,
                   cf.cash, cf.debt, cf.quarterly_opex_burn, cf.quarterly_invest_burn,
-                  cf.extraction_method, cf.confidence, cf.review_reason,
+                  cf.review_reason,
                   c.ticker, d.url, d.header
            FROM company_financials cf
            JOIN companies c ON cf.company_id = c.company_id
@@ -36,7 +36,7 @@ def api_review_list():
 
 @bp.route("/api/review/<int:financial_id>", methods=["PATCH"])
 def api_review_override(financial_id):
-    """Human override — sets extraction_method='manual', confidence='high', clears flag."""
+    """Human override — clears review flag."""
     data = request.get_json(silent=True) or {}
 
     conn = get_connection()
@@ -62,8 +62,6 @@ def api_review_override(financial_id):
             params.append(data[field])
 
     updates.extend([
-        "extraction_method = 'manual'",
-        "confidence = 'high'",
         "needs_review = 0",
         "reviewed_at = ?",
     ])

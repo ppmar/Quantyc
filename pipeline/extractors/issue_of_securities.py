@@ -239,8 +239,8 @@ def extract_issue_of_securities(document_id: int, pdf_bytes: bytes) -> dict | No
     conn.execute(
         """INSERT OR REPLACE INTO _stg_issue_of_securities
            (document_id, effective_date, security_class, quantity,
-            total_on_issue, exercise_price, raw_json, extraction_method, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'rule', ?)""",
+            total_on_issue, exercise_price, raw_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             document_id,
             result["effective_date"],

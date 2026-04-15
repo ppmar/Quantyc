@@ -56,8 +56,6 @@ CREATE TABLE IF NOT EXISTS company_financials (
     debt               REAL,
     quarterly_opex_burn REAL,                      -- from Appendix 5B section 1
     quarterly_invest_burn REAL,                    -- section 2
-    extraction_method  TEXT    NOT NULL,           -- 'rule'|'llm'|'manual'
-    confidence         TEXT    NOT NULL,           -- 'high'|'medium'|'low'
     needs_review       INTEGER NOT NULL DEFAULT 0, -- 0/1
     review_reason      TEXT,
     reviewed_at        TEXT,                       -- ISO timestamp of human override
@@ -79,7 +77,6 @@ CREATE TABLE IF NOT EXISTS _stg_appendix_5b (
     quarterly_opex_burn REAL,
     quarterly_invest_burn REAL,
     raw_json           TEXT,                       -- full extracted table JSON
-    extraction_method  TEXT    NOT NULL DEFAULT 'rule',
     created_at         TEXT    NOT NULL,
     UNIQUE(document_id)
 );
@@ -96,7 +93,6 @@ CREATE TABLE IF NOT EXISTS _stg_issue_of_securities (
     total_on_issue     REAL,
     exercise_price     REAL,
     raw_json           TEXT,
-    extraction_method  TEXT    NOT NULL DEFAULT 'rule',
     created_at         TEXT    NOT NULL,
     UNIQUE(document_id, security_class)
 );
@@ -115,7 +111,6 @@ CREATE TABLE IF NOT EXISTS _stg_presentation (
     cash               REAL,
     debt               REAL,
     raw_json           TEXT,
-    extraction_method  TEXT    NOT NULL DEFAULT 'rule',
     created_at         TEXT    NOT NULL,
     UNIQUE(document_id)
 );

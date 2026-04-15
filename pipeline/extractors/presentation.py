@@ -301,8 +301,8 @@ def extract_presentation(document_id: int, pdf_bytes: bytes) -> dict | None:
         """INSERT OR REPLACE INTO _stg_presentation
            (document_id, effective_date, shares_basic, shares_fd,
             options_outstanding, perf_rights_outstanding, cash, debt,
-            raw_json, extraction_method, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'rule', ?)""",
+            raw_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             document_id,
             result.get("effective_date"),

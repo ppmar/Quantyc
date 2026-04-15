@@ -18,7 +18,7 @@ def get_flagged_financials(limit: int = 50) -> list[dict]:
         """SELECT cf.financial_id, cf.effective_date, cf.announcement_date,
                   cf.shares_basic, cf.shares_fd, cf.options_outstanding,
                   cf.cash, cf.debt, cf.quarterly_opex_burn, cf.quarterly_invest_burn,
-                  cf.extraction_method, cf.confidence, cf.review_reason,
+                  cf.review_reason,
                   c.ticker, d.url, d.header
            FROM company_financials cf
            JOIN companies c ON cf.company_id = c.company_id

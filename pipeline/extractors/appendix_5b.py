@@ -218,8 +218,8 @@ def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
         """INSERT OR REPLACE INTO _stg_appendix_5b
            (document_id, effective_date, cash, debt,
             quarterly_opex_burn, quarterly_invest_burn,
-            raw_json, extraction_method, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'rule', ?)""",
+            raw_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             document_id,
             results.get("effective_date"),

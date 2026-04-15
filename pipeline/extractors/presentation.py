@@ -50,19 +50,29 @@ def _score_page(text: str) -> int:
 # ── Number parsing ───────────────────────────────────────────────────
 
 def _parse_amount(text: str) -> float | None:
-    """Parse a number with optional M/B suffix and currency prefix.
+    """Parse a number with optional M/B/million/billion suffix and currency prefix.
 
-    Examples: 'A$133M', 'C$2.7B', '259.0M', '271.0M', '$45.2M', '1,234,567'
+    Examples: 'A$133M', 'C$2.7B', '259.0M', '$507.6 million', '$1.128 billion',
+              '1,234,567', '~$181m'
     """
     if not text:
         return None
     text = text.strip()
+    # Remove leading ~ (approximate)
+    text = text.lstrip('~').strip()
     # Remove currency prefixes
     text = re.sub(r'^[A-Z]{0,3}\$', '', text)
     text = text.strip()
 
     multiplier = 1
-    if text.upper().endswith('B'):
+    lower = text.lower()
+    if lower.endswith('billion'):
+        multiplier = 1e9
+        text = text[:-7]
+    elif lower.endswith('million'):
+        multiplier = 1e6
+        text = text[:-7]
+    elif text.upper().endswith('B'):
         multiplier = 1e9
         text = text[:-1]
     elif text.upper().endswith('M'):
@@ -99,6 +109,34 @@ SHARES_FD_PATTERN = re.compile(
 CASH_PATTERN = re.compile(
     r"(?:^|\s)cash(?:\s+(?:and\s+cash\s+equivalents|position|balance|at\s+bank))?\s*[:\-–]?\s*"
     r"([A-Z]{0,3}\$?\d[\d,.]*[MBK]?)",
+    re.I,
+)
+
+# Narrative cash patterns for quarterly reports
+# "cash and gold on hand ... was $507.6 million"
+CASH_NARRATIVE_1 = re.compile(
+    r"cash\s+(?:and\s+(?:gold|bullion)\s+)?(?:on\s+hand|balance)"
+    r".*?(?:was|of|to)\s+"
+    r"(?:~\s*)?([A-Z]{0,3}\$?\d[\d,.]*\s*(?:million|billion|[MBK]))",
+    re.I,
+)
+
+# "A$606.5M cash & gold" or "A$606.5M3 cash"
+CASH_NARRATIVE_2 = re.compile(
+    r"([A-Z]{0,3}\$\d[\d,.]*[MBK]?)\d?\s+cash(?:\s+(?:&|and)\s+(?:gold|bullion))?",
+    re.I,
+)
+
+# "balance to $1.128 billion" (preceded by "cash" context)
+CASH_NARRATIVE_3 = re.compile(
+    r"(?:cash|bullion)\s+.*?balance\s+.*?(?:of|to)\s+"
+    r"(?:~\s*)?([A-Z]{0,3}\$?\d[\d,.]*\s*(?:million|billion|[MBK]))",
+    re.I,
+)
+
+# "Cash on hand A$810M"
+CASH_NARRATIVE_4 = re.compile(
+    r"cash\s+on\s+hand\s+([A-Z]{0,3}\$?\d[\d,.]*[MBK]?)",
     re.I,
 )
 
@@ -166,8 +204,8 @@ def _extract(pages: list[str]) -> dict | None:
     scored = [(i, _score_page(p), p) for i, p in enumerate(pages)]
     scored.sort(key=lambda x: x[1], reverse=True)
 
-    # Need at least some signal
-    if scored[0][1] < 6:
+    # Need at least some signal (3 = at least one field keyword)
+    if scored[0][1] < 3:
         return None
 
     # Use top 3 pages for extraction
@@ -186,10 +224,18 @@ def _extract(pages: list[str]) -> dict | None:
     if m:
         result["shares_fd"] = _parse_amount(m.group(1))
 
-    # Cash
+    # Cash — try structured pattern first, then narrative fallbacks
     m = CASH_PATTERN.search(text)
     if m:
         result["cash"] = _parse_amount(m.group(1))
+    if not result.get("cash"):
+        for pat in (CASH_NARRATIVE_1, CASH_NARRATIVE_2, CASH_NARRATIVE_3, CASH_NARRATIVE_4):
+            m = pat.search(text)
+            if m:
+                val = _parse_amount(m.group(1))
+                if val:
+                    result["cash"] = val
+                    break
 
     # Debt
     m = DEBT_PATTERN.search(text)

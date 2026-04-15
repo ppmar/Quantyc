@@ -60,8 +60,20 @@ def extract_classified() -> dict:
     from ingest.asx_poller import fetch_pdf_bytes
     from pipeline.extractors.appendix_5b import extract_appendix_5b
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
+    from pipeline.extractors.narrative import extract_narrative
     from pipeline.extractors.presentation import extract_presentation
     from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities, normalize_from_presentation
+
+    # Doc types that are never worth downloading (no financial data)
+    SKIP_TYPES = set()
+    # Headlines that are never worth extracting
+    SKIP_HEADLINES = [
+        "ceasing to be a substantial holder",
+        "change in substantial holding",
+        "cleansing notice",
+        "change of director",
+        "granting of asx waiver",
+    ]
 
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
@@ -75,6 +87,13 @@ def extract_classified() -> dict:
         doc_id = doc["document_id"]
         doc_type = doc["doc_type"]
         url = doc["url"]
+        header = (doc["header"] or "").lower()
+
+        # Skip docs that definitely have no financial data
+        if any(skip in header for skip in SKIP_HEADLINES):
+            _mark_skipped(doc_id)
+            stats["skipped"] += 1
+            continue
 
         if doc_type == "appendix_5b":
             pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
@@ -117,36 +136,50 @@ def extract_classified() -> dict:
                 stats["failed"] += 1
                 continue
 
+            # Try rule-based first, then LLM fallback
             result = extract_presentation(doc_id, pdf_bytes)
+            if not result:
+                result = extract_narrative(doc_id, pdf_bytes)
+            del pdf_bytes
+
+            if result:
+                normalize_from_presentation(doc_id)
+                _mark_parsed(doc_id)
+                stats["extracted"] += 1
+            else:
+                _mark_skipped(doc_id)
+                stats["skipped"] += 1
+
+        else:
+            # Try LLM extraction on any remaining doc type
+            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
+            if not pdf_bytes:
+                _mark_skipped(doc_id)
+                stats["skipped"] += 1
+                continue
+
+            result = extract_narrative(doc_id, pdf_bytes)
             del pdf_bytes
             if result:
                 normalize_from_presentation(doc_id)
                 _mark_parsed(doc_id)
                 stats["extracted"] += 1
             else:
-                # No capital structure data found — not a failure, just skip
-                conn = get_connection()
-                conn.execute(
-                    "UPDATE documents SET parse_status = 'skipped' WHERE document_id = ?",
-                    (doc_id,),
-                )
-                conn.commit()
-                conn.close()
+                _mark_skipped(doc_id)
                 stats["skipped"] += 1
-
-        else:
-            # Not handled in Week 2 — skip
-            conn = get_connection()
-            conn.execute(
-                "UPDATE documents SET parse_status = 'skipped' WHERE document_id = ?",
-                (doc_id,),
-            )
-            conn.commit()
-            conn.close()
-            stats["skipped"] += 1
 
     logger.info("Extraction: %s", stats)
     return stats
+
+
+def _mark_skipped(doc_id: int) -> None:
+    conn = get_connection()
+    conn.execute(
+        "UPDATE documents SET parse_status = 'skipped' WHERE document_id = ?",
+        (doc_id,),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _mark_parsed(doc_id: int) -> None:

@@ -22,6 +22,7 @@ def _extract_and_normalize(doc_id: int, doc_type: str, pdf_bytes: bytes) -> str:
     """Run the matching extractor + normalizer. Returns outcome string."""
     from pipeline.extractors.appendix_5b import extract_appendix_5b
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
+    from pipeline.extractors.narrative import extract_narrative
     from pipeline.extractors.presentation import extract_presentation
     from pipeline.normalize.company_financials import (
         normalize_from_5b, normalize_from_securities, normalize_from_presentation,
@@ -42,13 +43,22 @@ def _extract_and_normalize(doc_id: int, doc_type: str, pdf_bytes: bytes) -> str:
         return "extraction_empty"
 
     elif doc_type in ("presentation", "quarterly_activity"):
+        # Rule-based first, LLM fallback
         result = extract_presentation(doc_id, pdf_bytes)
+        if not result:
+            result = extract_narrative(doc_id, pdf_bytes)
         if result:
             normalize_from_presentation(doc_id)
             return "parsed"
-        return "skipped"  # no capital structure data, not a failure
+        return "skipped"
 
-    return "skipped"  # unhandled doc type
+    else:
+        # Try LLM on any other doc type
+        result = extract_narrative(doc_id, pdf_bytes)
+        if result:
+            normalize_from_presentation(doc_id)
+            return "parsed"
+        return "skipped"
 
 
 @bp.route("/api/upload", methods=["POST"])

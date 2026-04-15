@@ -81,55 +81,49 @@ def extract_classified() -> dict:
     ).fetchall()
     conn.close()
 
-    # Split into already-standardized vs needs-scanning
-    standard_docs = []
-    other_docs = []
-    for doc in docs:
-        if doc["doc_type"] in STANDARDIZED_TYPES:
-            standard_docs.append(doc)
-        else:
-            other_docs.append(doc)
+    # Types that might contain an embedded standardized form (worth downloading to check)
+    SCAN_TYPES = {"quarterly_activity"}
 
-    # Scan non-standardized docs for embedded standardized forms
-    # (e.g. quarterly activity reports with an Appendix 5B at the end)
-    for doc in other_docs:
+    for doc in docs:
         doc_id = doc["document_id"]
+        doc_type = doc["doc_type"]
         url = doc["url"]
 
-        pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
-        if not pdf_bytes:
-            _mark_skipped(doc_id)
-            stats["skipped"] += 1
-            continue
-
-        found_type = contains_standardized_form(pdf_bytes)
-        if found_type:
-            logger.info("Doc %d reclassified: %s → %s (embedded form found)", doc_id, doc["doc_type"], found_type)
-            _update_doc_type(doc_id, found_type)
-            _extract_doc(doc_id, found_type, pdf_bytes, stats,
+        if doc_type in STANDARDIZED_TYPES:
+            # Direct extraction — download and parse
+            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
+            if not pdf_bytes:
+                _mark_failed(doc_id, "download_failed")
+                stats["failed"] += 1
+                continue
+            _extract_doc(doc_id, doc_type, pdf_bytes, stats,
                          extract_appendix_5b, extract_issue_of_securities,
                          normalize_from_5b, normalize_from_securities)
+            del pdf_bytes
+
+        elif doc_type in SCAN_TYPES:
+            # Download and scan for embedded standardized forms (e.g. 5B at end of quarterly report)
+            pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
+            if not pdf_bytes:
+                _mark_skipped(doc_id)
+                stats["skipped"] += 1
+                continue
+            found_type = contains_standardized_form(pdf_bytes)
+            if found_type:
+                logger.info("Doc %d reclassified: %s → %s (embedded form)", doc_id, doc_type, found_type)
+                _update_doc_type(doc_id, found_type)
+                _extract_doc(doc_id, found_type, pdf_bytes, stats,
+                             extract_appendix_5b, extract_issue_of_securities,
+                             normalize_from_5b, normalize_from_securities)
+            else:
+                _mark_skipped(doc_id)
+                stats["skipped"] += 1
+            del pdf_bytes
+
         else:
+            # Not useful — skip without downloading
             _mark_skipped(doc_id)
             stats["skipped"] += 1
-        del pdf_bytes
-
-    # Process already-standardized docs
-    for doc in standard_docs:
-        doc_id = doc["document_id"]
-        url = doc["url"]
-        doc_type = doc["doc_type"]
-
-        pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
-        if not pdf_bytes:
-            _mark_failed(doc_id, "download_failed")
-            stats["failed"] += 1
-            continue
-
-        _extract_doc(doc_id, doc_type, pdf_bytes, stats,
-                     extract_appendix_5b, extract_issue_of_securities,
-                     normalize_from_5b, normalize_from_securities)
-        del pdf_bytes
 
     logger.info("Extraction: %s", stats)
     return stats

@@ -111,6 +111,31 @@ def _parse_date(text: str) -> str | None:
     return None
 
 
+_5B_MARKERS = ["appendix 5b", "quarterly cash flow report", "mining exploration entity"]
+
+
+def _find_5b_pages(pages: list[str]) -> str:
+    """Find pages that belong to the Appendix 5B section.
+
+    Returns concatenated text of only the 5B pages.
+    For standalone 5B docs, returns all pages.
+    For quarterly reports with embedded 5B, returns only the 5B section.
+    """
+    # Check if ANY page contains a 5B marker
+    start_idx = None
+    for i, text in enumerate(pages):
+        lower = text.lower()
+        if any(marker in lower for marker in _5B_MARKERS):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        return ""
+
+    # Take from the 5B start page to the end (5B is always at the end of quarterly reports)
+    return "\n".join(pages[start_idx:])
+
+
 def _extract_from_text(pdf_bytes: bytes) -> dict:
     """Extract cash flow fields from Appendix 5B using text-based parsing.
 
@@ -132,11 +157,14 @@ def _extract_from_text(pdf_bytes: bytes) -> dict:
         logger.error("Failed to open PDF: %s", e)
         return results
 
-    # Concatenate all page text
-    full_text = ""
+    # Extract all page texts
+    pages = []
     for page in pdf.pages:
-        full_text += (page.extract_text() or "") + "\n"
+        pages.append(page.extract_text() or "")
     pdf.close()
+
+    # Find only the 5B section pages (skip narrative pages in quarterly reports)
+    full_text = _find_5b_pages(pages)
 
     if not full_text.strip():
         return results

@@ -19,13 +19,8 @@ import requests
 from config import ASX_API_URL, ASX_CDN_BASE, FETCH_DELAY, USER_AGENT
 from db import get_connection, init_db
 from ingest.document_store import store_document
-from pipeline.classify import classify_headline
 
 logger = logging.getLogger(__name__)
-
-# Only ingest announcements that match these doc types (from headline classification).
-# Quarterly activity reports are included because they often contain an Appendix 5B.
-INGEST_TYPES = {"appendix_5b", "issue_of_securities", "quarterly_activity"}
 
 HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 PDF_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/pdf"}
@@ -95,15 +90,6 @@ def poll_ticker(ticker: str, count: int = 20, status: dict | None = None) -> dic
 
         header = ann.get("header", "")
         ann_date = ann.get("document_date")
-
-        # Pre-classify from headline — only ingest useful doc types
-        headline_type = classify_headline(header)
-        if headline_type not in INGEST_TYPES:
-            logger.debug("Skipping %s (%s): %s", ticker, headline_type or "other", header[:60])
-            if status:
-                status["docs_done"] = status.get("docs_done", 0) + 1
-            stats["skipped"] += 1
-            continue
 
         # Try to store — returns (document_id, is_new)
         doc_id, is_new = store_document(

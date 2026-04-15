@@ -183,21 +183,13 @@ def normalize_from_securities(document_id: int) -> bool:
     ticker = doc["ticker"]
     company_id = _get_or_create_company(conn, ticker)
 
-    # Aggregate across security classes
-    shares_basic = None
-    options_outstanding = None
-    perf_rights = None
+    # The extractor now stores all totals in raw_json of the first row
+    import json
+    raw = json.loads(rows[0]["raw_json"]) if rows[0]["raw_json"] else {}
 
-    for row in rows:
-        cls = row["security_class"]
-        total = row["total_on_issue"]
-
-        if cls == "ordinary":
-            shares_basic = total
-        elif cls == "option":
-            options_outstanding = total
-        elif cls == "performance_right":
-            perf_rights = total
+    shares_basic = raw.get("total_shares_on_issue") or rows[0]["total_on_issue"]
+    options_outstanding = raw.get("total_options_on_issue")
+    perf_rights = raw.get("total_perf_rights_on_issue")
 
     # Compute fully diluted
     shares_fd = None

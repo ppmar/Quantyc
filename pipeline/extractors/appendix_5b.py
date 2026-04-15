@@ -4,12 +4,16 @@ Appendix 5B Extractor
 Rule-based extraction from the ASX-mandated quarterly cash flow template.
 Writes results to _stg_appendix_5b staging table.
 
-Target fields:
-    Section 1 → quarterly_opex_burn
-    Section 2 → quarterly_invest_burn
-    Section 4 → cash
-    Section 6 → debt
-    Period end → effective_date
+The Appendix 5B is a standardized ASX form with fixed item numbers:
+    1.9  → Net cash from operating activities
+    2.6  → Net cash from investing activities
+    3.10 → Net cash from financing activities
+    4.6  → Cash and cash equivalents at end of period
+    7.1  → Loan facilities (total / drawn)
+    7.4  → Total financing facilities (total / drawn)
+    8.1  → Net cash from operating (repeated)
+
+All monetary values are reported in A$'000.
 """
 
 import io
@@ -24,47 +28,63 @@ from db import get_connection
 
 logger = logging.getLogger(__name__)
 
-# Row labels → field mapping (checked in order)
-ROW_PATTERNS = {
-    "cash": [
-        "cash and cash equivalents at end of",
-        "cash at end of quarter",
-        "cash and cash equiv",
-    ],
-    "quarterly_opex_burn": [
-        "net cash from / (used in) operating activities",
-        "net cash from/(used in) operating",
-        "net cash used in operating",
-        "net cash from operating",
-    ],
-    "quarterly_invest_burn": [
-        "net cash from / (used in) investing activities",
-        "net cash from/(used in) investing",
-        "net cash used in investing",
-        "net cash from investing",
-    ],
-    "debt": [
-        "total borrowings",
-        "loan facilities",
-        "borrowings",
-    ],
+# ── Text-based extraction using standardized item numbers ─────────────
+
+# Match "item_number  ...  number  number" on a single line
+# The first number after the item is current quarter, second is YTD
+def _build_item_pattern(item: str) -> re.Pattern:
+    """Build regex for a numbered line item like '1.9' or '4.6'.
+
+    Matches: '1.9 Net cash from / (used in) operating 62,609 116,326'
+    Also handles negative values in parentheses: '(42,657)'
+    """
+    escaped = re.escape(item)
+    return re.compile(
+        escaped
+        + r"\s+.*?"                                     # label text
+        + r"(\(?\d[\d,]*\.?\d*\)?)"                     # first number (current quarter)
+        + r"(?:\s+(\(?\d[\d,]*\.?\d*\)?))?",            # optional second number (YTD)
+        re.I,
+    )
+
+
+# Section 7 has a different layout: "7.1 Loan facilities  100,000  100,000"
+# Column 1 = total facility, Column 2 = amount drawn
+ITEM_PATTERNS = {
+    "operating":  _build_item_pattern("1.9"),
+    "investing":  _build_item_pattern("2.6"),
+    "financing":  _build_item_pattern("3.10"),
+    "cash":       _build_item_pattern("4.6"),
+    "loan_total": _build_item_pattern("7.1"),
+    "facility_total": _build_item_pattern("7.4"),
 }
 
-# Period end date patterns
-PERIOD_PATTERNS = [
-    re.compile(r"quarter\s+ended\s+(\d{1,2}\s+\w+\s+\d{4})", re.I),
-    re.compile(r"period\s+ended?\s+(\d{1,2}\s+\w+\s+\d{4})", re.I),
-    re.compile(r"(\d{1,2}/\d{1,2}/\d{4})"),
-    re.compile(r"(\d{4}-\d{2}-\d{2})"),
-]
+# Period end date: "Quarter ended ("current quarter")\n... 31 December 2025"
+# or inline: "Quarter ended 31 December 2025"
+QUARTER_ENDED_PATTERN = re.compile(
+    r"quarter\s+ended.*?(\d{1,2}\s+\w+\s+\d{4})",
+    re.I | re.DOTALL,
+)
+
+# Fallback: "31 December 2025" near top of document
+DATE_NEAR_TOP = re.compile(
+    r"(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})",
+    re.I,
+)
+
+# Compliance statement date: "Date: 20 January 2026"
+COMPLIANCE_DATE = re.compile(
+    r"Date:\s*(\d{1,2}\s+\w+\s+\d{4})",
+    re.I,
+)
 
 
 def _parse_amount(text: str) -> float | None:
-    """Parse a dollar amount, handling parentheses for negatives."""
+    """Parse a dollar amount from 5B, handling parentheses for negatives."""
     if not text:
         return None
-    text = text.strip().replace(",", "").replace("$", "").replace(" ", "")
-    if not text or text in ("-", "–", "—"):
+    text = text.strip()
+    if not text or text in ("-", "–", "—", "N/A"):
         return None
 
     negative = False
@@ -72,35 +92,38 @@ def _parse_amount(text: str) -> float | None:
         negative = True
         text = text[1:-1]
 
-    match = re.search(r"[-]?\d+\.?\d*", text)
-    if not match:
+    text = text.replace(",", "").strip()
+    try:
+        value = float(text)
+        return -value if negative else value
+    except ValueError:
         return None
 
-    value = float(match.group())
-    return -value if negative else value
 
-
-def _parse_period_date(full_text: str) -> str | None:
-    """Try to extract the period-end date from the document text."""
-    for pat in PERIOD_PATTERNS:
-        m = pat.search(full_text)
-        if m:
-            raw = m.group(1)
-            for fmt in ("%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
-                except ValueError:
-                    continue
+def _parse_date(text: str) -> str | None:
+    """Parse 'dd Month yyyy' to ISO date."""
+    text = text.strip()
+    for fmt in ("%d %B %Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
     return None
 
 
-def _extract_from_tables(pdf_bytes: bytes) -> dict:
-    """Extract cash flow fields from Appendix 5B tables.
+def _extract_from_text(pdf_bytes: bytes) -> dict:
+    """Extract cash flow fields from Appendix 5B using text-based parsing.
 
-    Values are in A$'000 as reported. We convert to dollars in the normalizer.
+    Uses standardized ASX item numbers for reliable matching.
+    Values are in A$'000 as reported.
     """
-    results = {field: None for field in ROW_PATTERNS}
-    full_text = ""
+    results = {
+        "cash": None,
+        "quarterly_opex_burn": None,
+        "quarterly_invest_burn": None,
+        "debt": None,
+        "effective_date": None,
+    }
 
     try:
         bio = io.BytesIO(pdf_bytes)
@@ -109,38 +132,53 @@ def _extract_from_tables(pdf_bytes: bytes) -> dict:
         logger.error("Failed to open PDF: %s", e)
         return results
 
+    # Concatenate all page text
+    full_text = ""
     for page in pdf.pages:
-        page_text = page.extract_text() or ""
-        full_text += page_text + "\n"
-
-        tables = page.extract_tables()
-        if not tables:
-            continue
-
-        for table in tables:
-            if not table:
-                continue
-            for row in table:
-                if not row or not row[0]:
-                    continue
-
-                label = str(row[0]).lower().strip()
-                for field, patterns in ROW_PATTERNS.items():
-                    if results[field] is not None:
-                        continue
-                    if any(p in label for p in patterns):
-                        # Value is typically in the "current quarter" column
-                        for cell in row[1:]:
-                            if cell:
-                                val = _parse_amount(str(cell))
-                                if val is not None:
-                                    results[field] = val
-                                    break
-
-    # Try to extract period-end date
-    results["effective_date"] = _parse_period_date(full_text)
-
+        full_text += (page.extract_text() or "") + "\n"
     pdf.close()
+
+    if not full_text.strip():
+        return results
+
+    # ── Extract period-end date ──
+    m = QUARTER_ENDED_PATTERN.search(full_text[:1500])
+    if m:
+        results["effective_date"] = _parse_date(m.group(1))
+
+    if not results["effective_date"]:
+        # Try any date near top of page 1
+        m = DATE_NEAR_TOP.search(full_text[:1500])
+        if m:
+            results["effective_date"] = _parse_date(m.group(1))
+
+    # ── Extract item 4.6: Cash at end of period ──
+    m = ITEM_PATTERNS["cash"].search(full_text)
+    if m:
+        results["cash"] = _parse_amount(m.group(1))
+
+    # ── Extract item 1.9: Net operating cash flow ──
+    m = ITEM_PATTERNS["operating"].search(full_text)
+    if m:
+        results["quarterly_opex_burn"] = _parse_amount(m.group(1))
+
+    # ── Extract item 2.6: Net investing cash flow ──
+    m = ITEM_PATTERNS["investing"].search(full_text)
+    if m:
+        results["quarterly_invest_burn"] = _parse_amount(m.group(1))
+
+    # ── Extract debt from section 7 ──
+    # Try 7.4 (total facilities) first, then 7.1 (loan facilities)
+    # Column 2 = "Amount drawn at quarter end"
+    for key in ("facility_total", "loan_total"):
+        m = ITEM_PATTERNS[key].search(full_text)
+        if m:
+            # The second number is "amount drawn"
+            drawn = _parse_amount(m.group(2)) if m.group(2) else _parse_amount(m.group(1))
+            if drawn and drawn > 0:
+                results["debt"] = drawn
+                break
+
     return results
 
 
@@ -151,7 +189,7 @@ def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
     """
     logger.info("Extracting Appendix 5B for doc %d", document_id)
 
-    results = _extract_from_tables(pdf_bytes)
+    results = _extract_from_text(pdf_bytes)
 
     cash = results.get("cash")
     opex = results.get("quarterly_opex_burn")
@@ -196,5 +234,6 @@ def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
     conn.commit()
     conn.close()
 
-    logger.info("5B staging for doc %d: cash=%s, opex_burn=%s, invest_burn=%s", document_id, cash, opex, invest)
+    logger.info("5B staging for doc %d: cash=%s, opex_burn=%s, invest_burn=%s, debt=%s",
+                document_id, cash, opex, invest, debt)
     return {"cash": cash, "debt": debt, "quarterly_opex_burn": opex, "quarterly_invest_burn": invest}

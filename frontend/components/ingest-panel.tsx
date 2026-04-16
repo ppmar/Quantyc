@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Download, Play, RefreshCw } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
-const COUNT_OPTIONS = [5, 10, 20, 50];
+const DEFAULT_SCAN_COUNT = 200;
 
 interface ScheduleInfo {
   enabled: boolean;
@@ -17,7 +17,7 @@ interface ScheduleInfo {
 
 export function IngestPanel() {
   const [ticker, setTicker] = useState("");
-  const [count, setCount] = useState(10);
+  const count = DEFAULT_SCAN_COUNT;
   const [loading, setLoading] = useState(false);
   const [runAllLoading, setRunAllLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -51,7 +51,7 @@ export function IngestPanel() {
       if (data.error) {
         setMessage(data.error);
       } else {
-        setMessage(`Ingest started for ${tickers.join(", ")} (last ${count})`);
+        setMessage(`Scanning announcements for ${tickers.join(", ")}…`);
         setTicker("");
       }
     } catch {
@@ -125,17 +125,6 @@ export function IngestPanel() {
               placeholder="Ticker(s), e.g. SX2, RMS"
               className="flex-1 h-8 rounded-md border border-border bg-background px-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
-            <select
-              value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
-              className="h-8 rounded-md border border-border bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              {COUNT_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  Last {n}
-                </option>
-              ))}
-            </select>
             <Button
               onClick={handleIngest}
               disabled={loading || !ticker.trim()}

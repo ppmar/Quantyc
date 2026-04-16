@@ -116,6 +116,41 @@ CREATE TABLE IF NOT EXISTS _stg_presentation (
 );
 
 -- ─────────────────────────────────────────────────────────────
+-- Detailed Appendix 5B reports (full section extraction)
+-- ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS appendix_5b_reports (
+    id                              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker                          TEXT    NOT NULL,
+    url_hash                        TEXT    NOT NULL UNIQUE,
+    source_url                      TEXT    NOT NULL,
+    announcement_header             TEXT    NOT NULL,
+    announcement_date               DATE    NOT NULL,
+    quarter_ended                   DATE,
+    ytd_months_covered              INTEGER,
+    entity_name                     TEXT,
+    abn                             TEXT,
+    parse_status                    TEXT    NOT NULL,
+    -- critical fields surfaced as top-level columns (everything in AUD thousands)
+    cq_net_cash_from_operating      INTEGER,   -- 1.9 current quarter
+    ytd_net_cash_from_operating     INTEGER,   -- 1.9 YTD
+    cq_exploration_and_evaluation   INTEGER,   -- 2.1(d) CQ
+    ytd_exploration_and_evaluation  INTEGER,   -- 2.1(d) YTD
+    cq_net_cash_from_investing      INTEGER,   -- 2.6 CQ
+    cq_net_cash_from_financing      INTEGER,   -- 3.10 CQ
+    cash_at_end_of_quarter          INTEGER,   -- 4.6 CQ
+    unused_facilities               INTEGER,   -- 7.5 / 8.5
+    total_available_funding         INTEGER,   -- 8.6
+    quarters_of_funding_available   REAL,      -- 8.7
+    -- full structured content
+    raw_json                        TEXT    NOT NULL,
+    validation_warnings_json        TEXT,
+    created_at                      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_app5b_ticker_date
+    ON appendix_5b_reports(ticker, quarter_ended DESC);
+
+-- ─────────────────────────────────────────────────────────────
 -- Placeholders for later weeks — create empty tables only.
 -- Do not populate. Do not extract into them yet.
 -- ─────────────────────────────────────────────────────────────

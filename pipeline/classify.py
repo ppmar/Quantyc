@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Checked in priority order — most specific first.
 HEADLINE_KEYWORDS: list[tuple[str, list[str]]] = [
     ("appendix_5b", [
-        "appendix 5b", "quarterly cash flow",
+        "appendix 5b", "quarterly cash flow", "quarterly cashflow",
     ]),
     ("study_dfs", [
         "definitive feasibility", "dfs",

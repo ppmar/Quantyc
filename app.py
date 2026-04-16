@@ -118,15 +118,10 @@ def _run_ingest(tickers, count):
     global pipeline_status
     try:
         from ingest.asx_poller import poll_tickers
-        from pipeline.orchestrator import run_orchestrator
 
-        # Phase 1: Poll ASX
+        # Poll ASX → classify by headline → download only 5Bs → extract immediately
         pipeline_status["phase"] = "polling"
         poll_tickers(tickers, count=count, status=pipeline_status)
-
-        # Phase 2: Classify + Extract + Normalize
-        pipeline_status["phase"] = "processing"
-        run_orchestrator()
 
         failed = pipeline_status.get("failed_count", 0)
         pipeline_status["phase"] = "done_with_errors" if failed > 0 else "done"

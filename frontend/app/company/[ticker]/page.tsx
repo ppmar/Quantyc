@@ -232,9 +232,15 @@ export default function CompanyPage({
                               ? "text-blue-400"
                               : "text-yellow-400"
                           }`}
+                          title={d.parse_error || undefined}
                         >
                           {d.parse_status}
                         </span>
+                        {d.parse_status === "failed" && d.parse_error && (
+                          <p className="text-[10px] text-red-400/70 font-mono mt-0.5 truncate max-w-[200px]" title={d.parse_error}>
+                            {d.parse_error}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
                         {d.announcement_date || "-"}

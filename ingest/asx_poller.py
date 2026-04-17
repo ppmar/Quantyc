@@ -229,8 +229,7 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
         if result:
             normalize_from_5b(doc_id)
             _mark_status(doc_id, "parsed")
-        else:
-            _mark_status(doc_id, "failed", "extraction_empty")
+        # else: gate already marked doc as failed with specific parse_error
 
     elif doc_type in SCAN_DOC_TYPES:
         # Quarterly activity report — scan for embedded 5B
@@ -249,8 +248,7 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
             if result:
                 normalize_from_5b(doc_id)
                 _mark_status(doc_id, "parsed")
-            else:
-                _mark_status(doc_id, "failed", "extraction_empty")
+            # else: gate already marked doc as failed with specific parse_error
         else:
             # No embedded 5B found — skip
             _mark_status(doc_id, "skipped")

@@ -35,6 +35,7 @@ export interface Document {
   announcement_date: string | null;
   url: string;
   parse_status: string;
+  parse_error: string | null;
   ingested_at: string;
 }
 

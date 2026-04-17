@@ -39,6 +39,93 @@ logger = logging.getLogger(__name__)
 _5B_MARKERS = ["appendix 5b", "quarterly cash flow report", "mining exploration entity"]
 
 
+# ── Gate 1: strict first-page content markers ───────────────────────
+
+# Required positive markers (case-insensitive, whitespace-tolerant)
+# At least one must appear on page 1.
+_GATE1_POSITIVE_PATTERNS = [
+    re.compile(r"appendix\s*5b", re.I),
+    re.compile(
+        r"mining\s+exploration\s+entity\s+or\s+oil\s+and\s+gas\s+exploration\s+entity",
+        re.I,
+    ),
+    re.compile(r"rule\s*5\.5", re.I),
+]
+
+# If any of these appear on page 1 AND no positive marker matches, reject.
+# These are other ASX forms whose keywords might leak past the headline filter.
+_GATE1_DISQUALIFIER_PATTERNS = [
+    re.compile(r"appendix\s*4c", re.I),   # producer quarterly
+    re.compile(r"appendix\s*5a", re.I),   # mining production quarterly
+    re.compile(r"appendix\s*4d", re.I),   # half-year financial
+    re.compile(r"appendix\s*4e", re.I),   # preliminary final report
+]
+
+
+def _gate1_first_page_check(pdf_bytes: bytes) -> tuple[bool, str]:
+    """
+    Verify the PDF is genuinely an Appendix 5B by inspecting first-page text only.
+
+    Returns (passed, reason). reason is the gate-failure code on failure,
+    or "ok" on pass.
+    """
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            if not pdf.pages:
+                return False, "pdf_no_pages"
+            first_page_text = pdf.pages[0].extract_text() or ""
+    except Exception as e:
+        return False, f"pdf_read_error:{type(e).__name__}"
+
+    # Normalize whitespace — ASX form wraps long identifier across lines
+    normalized = re.sub(r"\s+", " ", first_page_text)
+
+    has_positive = any(p.search(normalized) for p in _GATE1_POSITIVE_PATTERNS)
+    if not has_positive:
+        return False, "no_5b_marker_on_first_page"
+
+    for disq in _GATE1_DISQUALIFIER_PATTERNS:
+        m = disq.search(normalized)
+        if m:
+            return False, f"disqualifier:{m.group(0).lower()}"
+
+    return True, "ok"
+
+
+# ── Gate 2: effective_date must land on a fiscal quarter-end ────────
+
+_VALID_QUARTER_END_MMDD = {"03-31", "06-30", "09-30", "12-31"}
+
+
+def _gate2_quarter_end_check(effective_date: str | None) -> tuple[bool, str]:
+    """
+    Validate that effective_date (ISO-8601 string YYYY-MM-DD) is a
+    fiscal quarter-end. No tolerance window — the ASX form can only
+    report to a true quarter-end.
+    """
+    if not effective_date:
+        return False, "missing_effective_date"
+    try:
+        mmdd = effective_date[5:10]  # 'YYYY-MM-DD' → 'MM-DD'
+    except Exception:
+        return False, f"unparseable_date:{effective_date}"
+    if mmdd not in _VALID_QUARTER_END_MMDD:
+        return False, f"not_quarter_end:{effective_date}"
+    return True, "ok"
+
+
+def _mark_doc_failed(document_id: int, error: str) -> None:
+    """Mark document as failed with a short error code. Used by gates."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE documents SET parse_status = 'failed', parse_error = ? "
+        "WHERE document_id = ?",
+        (error, document_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 # ── Number parsing ──────────────────────────────────────────────────
 
 def _parse_amount(text: str) -> float | None:
@@ -407,18 +494,16 @@ def _extract_from_text(full_text: str) -> dict:
 # ── Date extraction ─────────────────────────────────────────────────
 
 def _extract_effective_date(full_text: str) -> str | None:
-    """Extract the quarter-end date from the 5B text."""
+    """Extract the quarter-end date from the 5B text.
+
+    Only accepts dates that appear in a 'Quarter ended ...' context.
+    Does NOT fall back to 'any date near the top' — that fallback was
+    producing non-quarter-end effective_dates on malformed filings.
+    """
     m = QUARTER_ENDED_PATTERN.search(full_text[:1500])
-    if m:
-        d = _parse_date(m.group(1))
-        if d:
-            return d
-
-    m = DATE_NEAR_TOP.search(full_text[:1500])
-    if m:
-        return _parse_date(m.group(1))
-
-    return None
+    if not m:
+        return None
+    return _parse_date(m.group(1))
 
 
 # ── Main extraction function ────────────────────────────────────────
@@ -477,18 +562,34 @@ def _extract_all_fields(pdf_bytes: bytes) -> dict:
 def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
     """
     Extract Appendix 5B data and write to _stg_appendix_5b.
-    Returns extracted values dict or None on failure.
+    Returns extracted values dict or None on gate failure / empty extraction.
     """
     logger.info("Extracting Appendix 5B for doc %d", document_id)
 
+    # ─── GATE 1: content check (first page must look like a real 5B) ───
+    gate1_ok, gate1_reason = _gate1_first_page_check(pdf_bytes)
+    if not gate1_ok:
+        logger.warning("Doc %d rejected by gate 1: %s", document_id, gate1_reason)
+        _mark_doc_failed(document_id, f"gate1:{gate1_reason}")
+        return None
+
     results = _extract_all_fields(pdf_bytes)
 
+    # ─── GATE 2: effective_date must be a fiscal quarter-end ───────────
+    gate2_ok, gate2_reason = _gate2_quarter_end_check(results.get("effective_date"))
+    if not gate2_ok:
+        logger.warning("Doc %d rejected by gate 2: %s", document_id, gate2_reason)
+        _mark_doc_failed(document_id, f"gate2:{gate2_reason}")
+        return None
+
+    # ─── existing logic below ───
     cash = results.get("cash")
     opex = results.get("operating")
     invest = results.get("investing")
 
     if cash is None and opex is None:
         logger.warning("No usable 5B data for doc %d", document_id)
+        _mark_doc_failed(document_id, "no_usable_data_after_gates")
         return None
 
     # Convert from A$'000 to dollars

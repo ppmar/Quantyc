@@ -17,6 +17,7 @@ Output doc_types:
 
 import io
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,19 @@ STANDARDIZED_FORM_KEYWORDS: list[tuple[str, list[str]]] = [
 ]
 
 
-def contains_standardized_form(pdf_bytes: bytes) -> str | None:
-    """Scan all pages for standardized ASX form signatures.
+_FORM_SECTION_HEADERS = [
+    re.compile(r"\b1\.\s*cash\s+flows\s+from\s+operating\s+activities", re.I),
+    re.compile(r"\b4\.\s*net\s+(increase|decrease).*cash", re.I),
+    re.compile(r"\b8\.\s*estimated\s+cash\s+available", re.I),
+]
 
-    Returns the doc_type of the first standardized form found, or None.
-    Used to detect e.g. an Appendix 5B embedded at the end of a quarterly report.
+
+def contains_standardized_form(pdf_bytes: bytes) -> str | None:
+    """Scan pages for a standardized ASX form signature.
+
+    Requires BOTH a form-identifier phrase AND a numbered section header
+    on the same page. This prevents matching PDFs that only reference
+    "Appendix 5B" in body text.
     """
     import pdfplumber
 
@@ -140,10 +149,16 @@ def contains_standardized_form(pdf_bytes: bytes) -> str | None:
         with pdfplumber.open(bio) as pdf:
             for page in pdf.pages:
                 text = (page.extract_text() or "").lower()
+                # Existing keyword check — must still pass
                 for doc_type, keywords in STANDARDIZED_FORM_KEYWORDS:
-                    for kw in keywords:
-                        if kw in text:
+                    if not any(kw in text for kw in keywords):
+                        continue
+                    # NEW: require at least one section header on the same page
+                    if doc_type == "appendix_5b":
+                        if any(p.search(text) for p in _FORM_SECTION_HEADERS):
                             return doc_type
+                    else:
+                        return doc_type
     except Exception as e:
         logger.warning("Could not scan PDF for standardized forms: %s", e)
     return None

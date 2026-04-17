@@ -124,9 +124,15 @@ export default function DocumentsPage() {
                           className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
                             STATUS_STYLE[doc.parse_status] || ""
                           }`}
+                          title={doc.parse_error || undefined}
                         >
                           {doc.parse_status}
                         </span>
+                        {doc.parse_status === "failed" && doc.parse_error && (
+                          <p className="text-[10px] text-red-400/70 font-mono mt-0.5 truncate max-w-[200px]" title={doc.parse_error}>
+                            {doc.parse_error}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground font-mono text-xs">
                         {doc.announcement_date || "-"}

@@ -111,7 +111,25 @@ def normalize_from_5b(document_id: int) -> bool:
     ticker = doc["ticker"]
     company_id = _get_or_create_company(conn, ticker)
 
-    effective_date = stg["effective_date"] or doc["announcement_date"] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # effective_date comes ONLY from the staging row. If the extractor did not
+    # produce a valid quarter-end date, gate 2 in the extractor will have marked
+    # the document as failed and we must not insert into company_financials.
+    effective_date = stg["effective_date"]
+    if not effective_date:
+        logger.warning(
+            "Doc %d has no effective_date in _stg_appendix_5b — refusing to normalize",
+            document_id,
+        )
+        conn.execute(
+            "UPDATE documents SET parse_status = 'failed', "
+            "parse_error = 'normalize_blocked:missing_effective_date' "
+            "WHERE document_id = ?",
+            (document_id,),
+        )
+        conn.commit()
+        conn.close()
+        return False
+
     announcement_date = doc["announcement_date"] or effective_date
 
     cash = stg["cash"]

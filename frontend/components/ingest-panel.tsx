@@ -7,6 +7,10 @@ import { Download, Play, RefreshCw } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const DEFAULT_SCAN_COUNT = 200;
+const DEFAULT_TICKERS = [
+  "DEV", "LYC", "PLS", "BOE", "WR1",
+  "NVA", "AGY", "MCR", "VUL", "GMD", "CEL",
+];
 
 interface ScheduleInfo {
   enabled: boolean;
@@ -65,15 +69,16 @@ export function IngestPanel() {
     setRunAllLoading(true);
     setMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/api/schedule/run`, {
+      const res = await fetch(`${API_BASE}/api/ingest`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tickers: DEFAULT_TICKERS, count: DEFAULT_SCAN_COUNT }),
       });
       const data = await res.json();
       if (data.error) {
         setMessage(data.error);
       } else {
-        const tickers = schedule?.tickers?.join(", ") || "all pilot tickers";
-        setMessage(`Ingest started for ${tickers}`);
+        setMessage(`Scanning ${DEFAULT_TICKERS.length} tickers: ${DEFAULT_TICKERS.join(", ")}…`);
       }
     } catch {
       setMessage("Failed to start ingest");
@@ -103,7 +108,7 @@ export function IngestPanel() {
               ) : (
                 <Play className="h-3 w-3" />
               )}
-              Run All
+              Fetch All ({DEFAULT_TICKERS.length})
             </Button>
             <button
               onClick={() => setShowPanel(!showPanel)}

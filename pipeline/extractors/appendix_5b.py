@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 
 _5B_MARKERS = ["appendix 5b", "quarterly cash flow report", "mining exploration entity"]
 
+# Footer printed at the bottom of every genuine ASX Appendix 5B page.
+# Pattern is deliberately broad on the date stamp to survive future template revisions.
+_5B_FOOTER_PATTERN = re.compile(
+    r"asx\s+listing\s+rules\s+appendix\s*5b\s*\(\d{2}/\d{2}/\d{2}\)",
+    re.I,
+)
+
 
 # ── Gate 1: strict first-page content markers ───────────────────────
 
@@ -64,7 +71,15 @@ _GATE1_DISQUALIFIER_PATTERNS = [
 
 def _gate1_first_page_check(pdf_bytes: bytes) -> tuple[bool, str]:
     """
-    Verify the PDF is genuinely an Appendix 5B by inspecting first-page text only.
+    Verify the PDF is genuinely an Appendix 5B by scanning all pages.
+
+    Acceptance criteria (ANY one is sufficient):
+      A) The ASX footer "_5B_FOOTER_PATTERN" appears on at least one page.
+      B) At least one _GATE1_POSITIVE_PATTERN matches on the first page
+         (retains compatibility with standalone 5B PDFs where the form
+         starts on page 1 and the footer may be cut off by pdfplumber).
+
+    Rejection: a disqualifier pattern appears AND no positive signal was found.
 
     Returns (passed, reason). reason is the gate-failure code on failure,
     or "ok" on pass.
@@ -73,23 +88,27 @@ def _gate1_first_page_check(pdf_bytes: bytes) -> tuple[bool, str]:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if not pdf.pages:
                 return False, "pdf_no_pages"
-            first_page_text = pdf.pages[0].extract_text() or ""
+            page_texts = [page.extract_text() or "" for page in pdf.pages]
     except Exception as e:
         return False, f"pdf_read_error:{type(e).__name__}"
 
-    # Normalize whitespace — ASX form wraps long identifier across lines
-    normalized = re.sub(r"\s+", " ", first_page_text)
+    # Strategy A: footer on any page — most reliable for embedded 5B docs
+    for text in page_texts:
+        normalized = re.sub(r"\s+", " ", text)
+        if _5B_FOOTER_PATTERN.search(normalized):
+            return True, "ok"
 
-    has_positive = any(p.search(normalized) for p in _GATE1_POSITIVE_PATTERNS)
-    if not has_positive:
-        return False, "no_5b_marker_on_first_page"
+    # Strategy B: positive markers on first page — for standalone 5B PDFs
+    first_page_normalized = re.sub(r"\s+", " ", page_texts[0])
+    has_positive = any(p.search(first_page_normalized) for p in _GATE1_POSITIVE_PATTERNS)
+    if has_positive:
+        for disq in _GATE1_DISQUALIFIER_PATTERNS:
+            m = disq.search(first_page_normalized)
+            if m:
+                return False, f"disqualifier:{m.group(0).lower()}"
+        return True, "ok"
 
-    for disq in _GATE1_DISQUALIFIER_PATTERNS:
-        m = disq.search(normalized)
-        if m:
-            return False, f"disqualifier:{m.group(0).lower()}"
-
-    return True, "ok"
+    return False, "no_5b_marker_on_any_page"
 
 
 # ── Gate 2: effective_date must land on a fiscal quarter-end ────────
@@ -165,21 +184,26 @@ def _parse_date(text: str) -> str | None:
 def _find_5b_pages(pages: list[str]) -> tuple[str, int]:
     """Find pages that belong to the Appendix 5B section.
 
+    Detection strategy (in priority order):
+      1. First page whose text contains _5B_FOOTER_PATTERN  <- primary
+      2. First page whose text contains any of _5B_MARKERS  <- fallback
+
     Returns (concatenated text of 5B pages, start page index).
-    For standalone 5B docs, returns all pages.
-    For quarterly reports with embedded 5B, returns only the 5B section.
+    Returns ("", -1) if no 5B section is found.
     """
-    start_idx = None
+    # Strategy 1: footer-based detection (reliable for embedded docs)
+    for i, text in enumerate(pages):
+        normalized = re.sub(r"\s+", " ", text)
+        if _5B_FOOTER_PATTERN.search(normalized):
+            return "\n".join(pages[i:]), i
+
+    # Strategy 2: marker-based fallback (legacy standalone docs)
     for i, text in enumerate(pages):
         lower = text.lower()
         if any(marker in lower for marker in _5B_MARKERS):
-            start_idx = i
-            break
+            return "\n".join(pages[i:]), i
 
-    if start_idx is None:
-        return "", -1
-
-    return "\n".join(pages[start_idx:]), start_idx
+    return "", -1
 
 
 # ── Strategy 1: pdfplumber table extraction ─────────────────────────

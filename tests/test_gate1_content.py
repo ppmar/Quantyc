@@ -72,3 +72,44 @@ class TestGate1Rejects:
         ok, reason = _gate1_first_page_check(b"not a pdf")
         assert ok is False
         assert "pdf_read_error" in reason
+
+
+class TestGate1EmbeddedDoc:
+    """Gate 1 must accept combined quarterly reports where 5B starts on a later page."""
+
+    def test_footer_on_last_page_passes(self):
+        """Simulates OZZ-style doc: narrative first, 5B form appended at the end."""
+        narrative_page = "March 2026 Quarterly Activities Report\nExploration update..."
+        five_b_page = (
+            "Rule 5.5\n"
+            "Appendix 5B\n"
+            "Mining exploration entity or oil and gas exploration entity\n"
+            "quarterly cash flow report\n"
+            "Name of entity: TEST CO\n"
+            "Quarter ended: 31 March 2026\n"
+            "ASX Listing Rules Appendix 5B (17/07/20) Page 1\n"
+            "+ See chapter 19 of the ASX Listing Rules for defined terms."
+        )
+        # Build a 2-page PDF: page 1 = narrative, page 2 = 5B form
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=A4)
+        # Page 1 — narrative only, no 5B markers
+        c.drawString(72, 750, narrative_page)
+        c.showPage()
+        # Page 2 — genuine 5B form with footer
+        y = 750
+        for line in five_b_page.split("\n"):
+            c.drawString(72, y, line)
+            y -= 14
+        c.save()
+        pdf = buf.getvalue()
+
+        ok, reason = _gate1_first_page_check(pdf)
+        assert ok is True, f"Expected pass, got reason: {reason}"
+
+    def test_no_footer_no_marker_fails(self):
+        """Doc with no 5B signals on any page must be rejected."""
+        pdf = _make_pdf("Quarterly Activities Report\nSome company did some exploration")
+        ok, reason = _gate1_first_page_check(pdf)
+        assert ok is False
+        assert reason == "no_5b_marker_on_any_page"

@@ -3,6 +3,7 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent / "quantyc.db"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -18,6 +19,11 @@ def init_db():
     conn = get_connection()
     with open(SCHEMA_PATH) as f:
         conn.executescript(f.read())
+    # Apply migrations
+    if MIGRATIONS_DIR.exists():
+        for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            with open(migration) as f:
+                conn.executescript(f.read())
     conn.close()
 
 

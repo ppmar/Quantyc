@@ -36,7 +36,7 @@ HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 PDF_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/pdf"}
 
 # Download and parse these doc types directly
-TARGET_DOC_TYPES = {"appendix_5b"}
+TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities"}
 # Also download these to scan for embedded 5B forms
 SCAN_DOC_TYPES = {"quarterly_activity"}
 
@@ -213,7 +213,7 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
     """Classify, extract, and normalize a document immediately."""
     from pipeline.classify import contains_standardized_form
     from pipeline.extractors.appendix_5b import extract_appendix_5b
-    from pipeline.normalize.company_financials import normalize_from_5b
+    from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_2a
 
     conn = get_connection()
     conn.execute(
@@ -230,6 +230,10 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
             normalize_from_5b(doc_id)
             _mark_status(doc_id, "parsed")
         # else: gate already marked doc as failed with specific parse_error
+
+    elif doc_type == "issue_of_securities":
+        # Try Appendix 2A parser first (structured Part 4 extraction)
+        _extract_securities(doc_id, pdf_bytes, normalize_from_2a)
 
     elif doc_type in SCAN_DOC_TYPES:
         # Quarterly activity report — scan for embedded 5B
@@ -252,6 +256,49 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
         else:
             # No embedded 5B found — skip
             _mark_status(doc_id, "skipped")
+
+
+def _extract_securities(doc_id: int, pdf_bytes: bytes, normalize_from_2a) -> None:
+    """Try Appendix 2A parser, fall back to legacy issue_of_securities extractor."""
+    from parsers.appendix_2a import detect_profile, parse as parse_2a
+    from pipeline.extractors.issue_of_securities import extract_issue_of_securities
+    from pipeline.normalize.company_financials import normalize_from_securities
+
+    # Get announcement_date and ticker for the parser
+    conn = get_connection()
+    doc = conn.execute(
+        "SELECT ticker, announcement_date FROM documents WHERE document_id = ?", (doc_id,)
+    ).fetchone()
+    conn.close()
+
+    if not doc:
+        _mark_status(doc_id, "failed", "missing_document_row")
+        return
+
+    ticker = doc["ticker"]
+    ann_date_str = doc["announcement_date"]
+
+    # Try structured 2A parser
+    if detect_profile(pdf_bytes):
+        try:
+            from datetime import date as date_type
+            ann_date = date_type.fromisoformat(ann_date_str) if ann_date_str else date_type.today()
+            result = parse_2a(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
+            normalize_from_2a(doc_id, result)
+            _mark_status(doc_id, "parsed")
+            logger.info("Doc %d: parsed as Appendix 2A (basic=%d, fd=%d)",
+                        doc_id, result.shares_basic, result.shares_fd_naive)
+            return
+        except Exception as e:
+            logger.warning("Doc %d: 2A parser failed (%s), trying legacy extractor", doc_id, e)
+
+    # Fallback: legacy issue_of_securities extractor
+    result = extract_issue_of_securities(doc_id, pdf_bytes)
+    if result:
+        normalize_from_securities(doc_id)
+        _mark_status(doc_id, "parsed")
+    else:
+        _mark_status(doc_id, "failed", "no_securities_data")
 
 
 def _mark_status(doc_id: int, status: str, error: str | None = None) -> None:

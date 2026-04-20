@@ -311,3 +311,103 @@ def normalize_from_presentation(document_id: int) -> bool:
     logger.info("Normalized presentation for %s doc %d: basic=%s, fd=%s, cash=%s",
                 ticker, document_id, shares_basic, shares_fd, cash)
     return True
+
+
+def normalize_from_2a(document_id: int, capital_structure) -> bool:
+    """
+    Normalize Appendix 2A parsed result into company_financials +
+    capital_structure_snapshots + unquoted_instruments.
+
+    Args:
+        document_id: the documents.document_id
+        capital_structure: Appendix2ACapitalStructure dataclass from parsers.appendix_2a
+    """
+    conn = get_connection()
+
+    if _already_normalized(conn, document_id):
+        logger.info("Doc %d already normalized, skipping", document_id)
+        conn.close()
+        return True
+
+    doc = conn.execute(
+        "SELECT ticker, announcement_date FROM documents WHERE document_id = ?", (document_id,)
+    ).fetchone()
+
+    if not doc:
+        conn.close()
+        return False
+
+    ticker = doc["ticker"]
+    company_id = _get_or_create_company(conn, ticker)
+
+    cs = capital_structure
+    effective_date = doc["announcement_date"] or cs.snapshot_date.isoformat()
+    announcement_date = doc["announcement_date"] or effective_date
+
+    needs_review, review_reason = _check_review_flags(
+        conn, company_id, None, cs.shares_fd_naive, None
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Insert company_financials snapshot
+    conn.execute(
+        """INSERT INTO company_financials
+           (company_id, document_id, effective_date, announcement_date,
+            shares_basic, shares_fd, options_outstanding,
+            perf_rights_outstanding, convertibles_face_value,
+            extraction_method, confidence,
+            needs_review, review_reason, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            company_id, document_id, effective_date, announcement_date,
+            cs.shares_basic, cs.shares_fd_naive, cs.options_outstanding,
+            cs.performance_rights_count, cs.convertible_notes_face_count,
+            "rule", "high",
+            1 if needs_review else 0, review_reason, now,
+        ),
+    )
+
+    # Insert capital_structure_snapshots (if table exists)
+    try:
+        cursor = conn.execute(
+            """INSERT INTO capital_structure_snapshots
+               (doc_id, ticker, snapshot_date, source_profile,
+                shares_basic, shares_fd_naive, options_outstanding,
+                convertible_notes_face, performance_rights_count,
+                parser_version, parsed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(document_id), ticker, effective_date, "appendix_2a",
+                cs.shares_basic, cs.shares_fd_naive, cs.options_outstanding,
+                cs.convertible_notes_face_count, cs.performance_rights_count,
+                cs.parser_version, cs.parsed_at.isoformat(),
+            ),
+        )
+        snapshot_id = cursor.lastrowid
+
+        # Insert unquoted instruments
+        for inst in cs.unquoted_instruments:
+            conn.execute(
+                """INSERT INTO unquoted_instruments
+                   (snapshot_id, asx_code, instrument_type, description,
+                    total_on_issue, expiry_date, strike_aud)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    snapshot_id, inst.asx_code, inst.instrument_type,
+                    inst.description, inst.total_on_issue,
+                    inst.expiry_date.isoformat() if inst.expiry_date else None,
+                    float(inst.strike_aud) if inst.strike_aud else None,
+                ),
+            )
+    except Exception as e:
+        # capital_structure_snapshots table may not exist yet on older DBs
+        logger.warning("Could not write to capital_structure_snapshots: %s", e)
+
+    conn.commit()
+    conn.close()
+
+    logger.info("Normalized 2A for %s doc %d: basic=%s, fd_naive=%s, opts=%s, cn=%s",
+                ticker, document_id, cs.shares_basic, cs.shares_fd_naive,
+                cs.options_outstanding, cs.convertible_notes_face_count)
+    return True

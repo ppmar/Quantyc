@@ -78,8 +78,11 @@ def _gate1_first_page_check(pdf_bytes: bytes) -> tuple[bool, str]:
       B) At least one _GATE1_POSITIVE_PATTERN matches on the first page
          (retains compatibility with standalone 5B PDFs where the form
          starts on page 1 and the footer may be cut off by pdfplumber).
+      C) At least one _GATE1_POSITIVE_PATTERN matches on any later page
+         (for embedded 5B docs that don't use the ASX footer, e.g. WR1).
 
-    Rejection: a disqualifier pattern appears AND no positive signal was found.
+    Rejection: a disqualifier pattern appears on page 1 AND no positive
+    signal was found.
 
     Returns (passed, reason). reason is the gate-failure code on failure,
     or "ok" on pass.
@@ -107,6 +110,13 @@ def _gate1_first_page_check(pdf_bytes: bytes) -> tuple[bool, str]:
             if m:
                 return False, f"disqualifier:{m.group(0).lower()}"
         return True, "ok"
+
+    # Strategy C: positive markers on any page — for embedded 5B without ASX footer
+    # (e.g. WR1 uses company footer instead of ASX-mandated footer)
+    for text in page_texts[1:]:
+        normalized = re.sub(r"\s+", " ", text)
+        if any(p.search(normalized) for p in _GATE1_POSITIVE_PATTERNS):
+            return True, "ok"
 
     return False, "no_5b_marker_on_any_page"
 
@@ -181,12 +191,26 @@ def _parse_date(text: str) -> str | None:
 
 # ── Page filtering ──────────────────────────────────────────────────
 
+# Strong signal: the formal 5B form header (not a passing reference)
+_5B_FORM_HEADER = re.compile(
+    r"appendix\s*5b\s*[–—-]\s*mining\s+exploration\s+entity",
+    re.I,
+)
+
+# Section 1 header that only appears on the actual cash-flow form page
+_5B_SECTION1 = re.compile(
+    r"1\.\s*Cash\s+flows\s+from\s+operating\s+activities",
+    re.I,
+)
+
+
 def _find_5b_pages(pages: list[str]) -> tuple[str, int]:
     """Find pages that belong to the Appendix 5B section.
 
     Detection strategy (in priority order):
-      1. First page whose text contains _5B_FOOTER_PATTERN  <- primary
-      2. First page whose text contains any of _5B_MARKERS  <- fallback
+      1. First page whose text contains _5B_FOOTER_PATTERN   <- ASX footer
+      2. First page with formal 5B form header or Section 1  <- strong signal
+      3. First page whose text contains any of _5B_MARKERS   <- loose fallback
 
     Returns (concatenated text of 5B pages, start page index).
     Returns ("", -1) if no 5B section is found.
@@ -197,7 +221,16 @@ def _find_5b_pages(pages: list[str]) -> tuple[str, int]:
         if _5B_FOOTER_PATTERN.search(normalized):
             return "\n".join(pages[i:]), i
 
-    # Strategy 2: marker-based fallback (legacy standalone docs)
+    # Strategy 2: formal 5B form header or Section 1 on same page
+    for i, text in enumerate(pages):
+        normalized = re.sub(r"\s+", " ", text)
+        if _5B_FORM_HEADER.search(normalized) or (
+            _5B_SECTION1.search(normalized)
+            and any(m in text.lower() for m in _5B_MARKERS)
+        ):
+            return "\n".join(pages[i:]), i
+
+    # Strategy 3: marker-based fallback (legacy standalone docs)
     for i, text in enumerate(pages):
         lower = text.lower()
         if any(marker in lower for marker in _5B_MARKERS):

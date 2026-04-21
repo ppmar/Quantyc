@@ -6,7 +6,7 @@ import {
   type FinancialsResponse,
   type Document,
 } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -21,7 +21,7 @@ function fmtAud(val: number | null | undefined) {
   if (Math.abs(val) >= 1e9) return `A$${(val / 1e9).toFixed(2)}B`;
   if (Math.abs(val) >= 1e6) return `A$${(val / 1e6).toFixed(2)}M`;
   if (Math.abs(val) >= 1e3) return `A$${(val / 1e3).toFixed(1)}K`;
-  return `A$${val.toFixed(2)}`;
+  return `A$${val.toFixed(0)}`;
 }
 
 function fmtShares(val: number | null | undefined) {
@@ -74,14 +74,14 @@ export default function CompanyPage({
           href="/"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-3"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to dashboard
+          <ArrowLeft className="h-3.5 w-3.5" /> Dashboard
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex items-baseline gap-3">
           <h1 className="text-3xl font-bold font-mono text-primary">
             {ticker.toUpperCase()}
           </h1>
           {companyName && (
-            <span className="text-lg text-muted-foreground">{companyName}</span>
+            <span className="text-base text-muted-foreground">{companyName}</span>
           )}
         </div>
       </div>
@@ -91,9 +91,9 @@ export default function CompanyPage({
         <Card className="bg-primary/5 border-primary/20">
           <CardContent className="py-4">
             <p className="text-xs uppercase tracking-wider text-muted-foreground mb-3">
-              Latest snapshot — {latest.effective_date}
+              Latest — {latest.effective_date}
             </p>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <div>
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Cash</p>
                 <p className="text-xl font-bold font-mono">{fmtAud(latest.cash)}</p>
@@ -103,22 +103,12 @@ export default function CompanyPage({
                 <p className="text-lg font-mono">{fmtAud(latest.debt)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Opex Burn/Qtr</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Burn / Qtr</p>
                 <p className="text-lg font-mono">{fmtAud(latest.quarterly_opex_burn)}</p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Shares Basic</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Shares</p>
                 <p className="text-lg font-mono">{fmtShares(latest.shares_basic)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Shares FD</p>
-                <p className="text-lg font-mono">{fmtShares(latest.shares_fd)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Confidence</p>
-                <Badge variant="outline" className="text-xs mt-1">
-                  {latest.confidence}
-                </Badge>
               </div>
             </div>
             {latest.needs_review === 1 && latest.review_reason && (
@@ -152,12 +142,10 @@ export default function CompanyPage({
                       <th className="px-4 py-3 font-medium">Date</th>
                       <th className="px-4 py-3 font-medium text-right">Cash</th>
                       <th className="px-4 py-3 font-medium text-right">Debt</th>
-                      <th className="px-4 py-3 font-medium text-right">Opex/Qtr</th>
-                      <th className="px-4 py-3 font-medium text-right">Invest/Qtr</th>
-                      <th className="px-4 py-3 font-medium text-right">Shares FD</th>
+                      <th className="px-4 py-3 font-medium text-right">Burn / Qtr</th>
+                      <th className="px-4 py-3 font-medium text-right">Shares</th>
                       <th className="px-4 py-3 font-medium text-right">Options</th>
-                      <th className="px-4 py-3 font-medium">Method</th>
-                      <th className="px-4 py-3 font-medium">Review</th>
+                      <th className="px-4 py-3 font-medium">Source</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
@@ -167,27 +155,17 @@ export default function CompanyPage({
                         <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.cash)}</td>
                         <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.debt)}</td>
                         <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.quarterly_opex_burn)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.quarterly_invest_burn)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtShares(f.shares_fd)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{fmtShares(f.shares_basic)}</td>
                         <td className="px-4 py-2.5 text-right font-mono">{fmtShares(f.options_outstanding)}</td>
                         <td className="px-4 py-2.5">
                           <Badge variant="secondary" className="text-[10px]">{f.extraction_method}</Badge>
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {f.needs_review === 1 ? (
-                            <span className="text-xs text-destructive" title={f.review_reason || ""}>flagged</span>
-                          ) : f.reviewed_at ? (
-                            <span className="text-xs text-green-400">reviewed</span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">ok</span>
-                          )}
                         </td>
                       </tr>
                     ))}
                     {history.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
-                          No financial data
+                        <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                          No financial data yet
                         </td>
                       </tr>
                     )}
@@ -202,74 +180,74 @@ export default function CompanyPage({
         <TabsContent value="documents">
           <Card>
             <CardContent className="p-0">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-muted-foreground">
-                    <th className="px-4 py-3 font-medium">Type</th>
-                    <th className="px-4 py-3 font-medium">Header</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Date</th>
-                    <th className="px-4 py-3 font-medium">Link</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/50">
-                  {documents.map((d) => (
-                    <tr key={d.document_id} className="hover:bg-muted/30">
-                      <td className="px-4 py-2.5">
-                        <Badge variant="secondary" className="text-xs">{d.doc_type}</Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-muted-foreground max-w-sm truncate">
-                        {d.header || "-"}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span
-                          className={`text-xs font-medium ${
-                            d.parse_status === "parsed"
-                              ? "text-green-400"
-                              : d.parse_status === "failed"
-                              ? "text-red-400"
-                              : d.parse_status === "classified"
-                              ? "text-blue-400"
-                              : "text-yellow-400"
-                          }`}
-                          title={d.parse_error || undefined}
-                        >
-                          {d.parse_status}
-                        </span>
-                        {d.parse_status === "failed" && d.parse_error && (
-                          <p className="text-[10px] text-red-400/70 font-mono mt-0.5 truncate max-w-[200px]" title={d.parse_error}>
-                            {d.parse_error}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                        {d.announcement_date || "-"}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        {d.url && !d.url.startsWith("upload://") ? (
-                          <a
-                            href={d.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-primary hover:underline"
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-muted-foreground">
+                      <th className="px-4 py-3 font-medium">Type</th>
+                      <th className="px-4 py-3 font-medium">Title</th>
+                      <th className="px-4 py-3 font-medium">Date</th>
+                      <th className="px-4 py-3 font-medium">Status</th>
+                      <th className="px-4 py-3 font-medium w-12"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {documents.map((d) => (
+                      <tr key={d.document_id} className="hover:bg-muted/30">
+                        <td className="px-4 py-2.5">
+                          <Badge variant="secondary" className="text-[10px]">{d.doc_type}</Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-muted-foreground max-w-md truncate text-xs">
+                          {d.header || "-"}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                          {d.announcement_date || "-"}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span
+                            className={`text-xs font-medium ${
+                              d.parse_status === "parsed"
+                                ? "text-green-400"
+                                : d.parse_status === "failed"
+                                ? "text-red-400"
+                                : d.parse_status === "classified"
+                                ? "text-blue-400"
+                                : "text-yellow-400"
+                            }`}
+                            title={d.parse_error || undefined}
                           >
-                            PDF
-                          </a>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {documents.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
-                        No documents
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                            {d.parse_status}
+                          </span>
+                          {d.parse_status === "failed" && d.parse_error && (
+                            <p className="text-[10px] text-red-400/70 font-mono mt-0.5 truncate max-w-[180px]" title={d.parse_error}>
+                              {d.parse_error}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {d.url && !d.url.startsWith("upload://") ? (
+                            <a
+                              href={d.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary hover:underline"
+                            >
+                              PDF
+                            </a>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                    {documents.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                          No documents yet
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

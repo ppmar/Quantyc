@@ -121,6 +121,10 @@ export const api = {
     fetch(`${API_BASE}/api/orchestrate`, { method: "POST" }).then((r) =>
       r.json()
     ),
+  snapshot: (ticker: string) =>
+    fetchAPI<import("@/types/snapshot").CompanySnapshot>(
+      `/api/company/${ticker.toUpperCase()}/snapshot`
+    ),
   upload: (ticker: string, files: FileList) => {
     const form = new FormData();
     form.set("ticker", ticker);

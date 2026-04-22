@@ -110,6 +110,9 @@
   body {
     @apply bg-background text-foreground;
   }
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
   html {
     @apply font-sans;
   }

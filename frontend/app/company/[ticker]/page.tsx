@@ -1,36 +1,16 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
-import {
-  api,
-  type FinancialsResponse,
-  type Document,
-} from "@/lib/api";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  ArrowLeft,
-  FileText,
-  Landmark,
-} from "lucide-react";
-import Link from "next/link";
-
-function fmtAud(val: number | null | undefined) {
-  if (val == null) return "-";
-  if (Math.abs(val) >= 1e9) return `A$${(val / 1e9).toFixed(2)}B`;
-  if (Math.abs(val) >= 1e6) return `A$${(val / 1e6).toFixed(2)}M`;
-  if (Math.abs(val) >= 1e3) return `A$${(val / 1e3).toFixed(1)}K`;
-  return `A$${val.toFixed(0)}`;
-}
-
-function fmtShares(val: number | null | undefined) {
-  if (val == null) return "-";
-  if (val >= 1e9) return `${(val / 1e9).toFixed(2)}B`;
-  if (val >= 1e6) return `${(val / 1e6).toFixed(1)}M`;
-  if (val >= 1e3) return `${(val / 1e3).toFixed(0)}K`;
-  return val.toLocaleString();
-}
+import { useState, use } from "react";
+import { useCompanySnapshot } from "@/hooks/useCompanySnapshot";
+import { CompanyHeader } from "@/components/company/CompanyHeader";
+import { TabBar } from "@/components/company/TabBar";
+import { HeroGrid } from "@/components/company/HeroGrid";
+import { CashTrajectoryChart } from "@/components/company/CashTrajectoryChart";
+import { ActivityFeed } from "@/components/company/ActivityFeed";
+import { SnapshotSkeleton } from "@/components/company/Skeleton";
+import { FinancialsTab } from "./FinancialsTab";
+import { CapitalTab } from "./CapitalTab";
+import { DocumentsTab } from "./DocumentsTab";
 
 export default function CompanyPage({
   params,
@@ -38,220 +18,97 @@ export default function CompanyPage({
   params: Promise<{ ticker: string }>;
 }) {
   const { ticker } = use(params);
-  const [financials, setFinancials] = useState<FinancialsResponse | null>(null);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [loading, setLoading] = useState(true);
+  const snapshot = useCompanySnapshot(ticker);
+  const [activeTab, setActiveTab] = useState("summary");
 
-  useEffect(() => {
-    Promise.all([
-      api.financials(ticker).catch(() => null),
-      api.documents({ ticker }).catch(() => []),
-    ])
-      .then(([fin, docs]) => {
-        setFinancials(fin);
-        setDocuments(docs);
-      })
-      .finally(() => setLoading(false));
-  }, [ticker]);
-
-  if (loading) {
+  // Loading state — skeleton matching final layout shape
+  if (snapshot.status === "loading") {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <div className="tabular-nums max-w-4xl">
+        <SnapshotSkeleton />
       </div>
     );
   }
 
-  const latest = financials?.latest ?? null;
-  const history = financials?.history ?? [];
-  const companyName = latest?.name ?? null;
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-3"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Dashboard
-        </Link>
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-3xl font-bold font-mono text-primary">
-            {ticker.toUpperCase()}
-          </h1>
-          {companyName && (
-            <span className="text-base text-muted-foreground">{companyName}</span>
-          )}
+  // Error state — section-level error with retry
+  if (snapshot.status === "error") {
+    return (
+      <div className="max-w-4xl">
+        <CompanyHeader
+          ticker={ticker.toUpperCase()}
+          name={ticker.toUpperCase()}
+          metaLine=""
+        />
+        <div className="mt-12 text-center py-16">
+          <p className="text-zinc-400 text-sm mb-4">
+            Failed to load data for this ticker.
+          </p>
+          <button
+            onClick={snapshot.retry}
+            className="text-sm text-zinc-300 hover:text-zinc-100 underline underline-offset-4 transition-colors"
+          >
+            Retry
+          </button>
         </div>
       </div>
+    );
+  }
 
-      {/* Latest snapshot */}
-      {latest && (
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="py-4">
-            <p className="text-xs uppercase tracking-wider text-muted-foreground mb-3">
-              Latest — {latest.effective_date}
-            </p>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Cash</p>
-                <p className="text-xl font-bold font-mono">{fmtAud(latest.cash)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Debt</p>
-                <p className="text-lg font-mono">{fmtAud(latest.debt)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Burn / Qtr</p>
-                <p className="text-lg font-mono">{fmtAud(latest.quarterly_opex_burn)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Shares</p>
-                <p className="text-lg font-mono">{fmtShares(latest.shares_basic)}</p>
-              </div>
-            </div>
-            {latest.needs_review === 1 && latest.review_reason && (
-              <p className="mt-3 text-xs text-destructive bg-destructive/10 px-2 py-1 rounded-md inline-block">
-                {latest.review_reason}
-              </p>
-            )}
-          </CardContent>
-        </Card>
+  const data = snapshot.data;
+
+  // Empty state — no data yet
+  if (!data.has_data) {
+    return (
+      <div className="tabular-nums max-w-4xl">
+        <CompanyHeader
+          ticker={data.ticker}
+          name={data.name}
+          metaLine={data.meta_line}
+        />
+        <p className="mt-12 text-sm text-zinc-500">
+          Documents are being processed for this ticker.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="tabular-nums max-w-4xl space-y-10">
+      <CompanyHeader
+        ticker={data.ticker}
+        name={data.name}
+        metaLine={data.meta_line}
+      />
+
+      <TabBar tabs={data.tabs} active={activeTab} onChange={setActiveTab} />
+
+      {activeTab === "summary" && (
+        <div className="space-y-10">
+          <HeroGrid cash={data.cash} capital={data.capital} />
+
+          <div className="border-t border-white/[0.06]" />
+
+          <CashTrajectoryChart data={data.cash_history} />
+
+          {data.cash_history.length >= 3 && data.activity.length > 0 && (
+            <div className="border-t border-white/[0.06]" />
+          )}
+
+          <ActivityFeed events={data.activity} ticker={data.ticker} />
+        </div>
       )}
 
-      {/* Tabs */}
-      <Tabs defaultValue="financials" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="financials" className="gap-1.5">
-            <Landmark className="h-3.5 w-3.5" /> Financials
-          </TabsTrigger>
-          <TabsTrigger value="documents" className="gap-1.5">
-            <FileText className="h-3.5 w-3.5" /> Documents ({documents.length})
-          </TabsTrigger>
-        </TabsList>
+      {activeTab === "financials" && (
+        <FinancialsTab ticker={data.ticker} />
+      )}
 
-        {/* Financials tab */}
-        <TabsContent value="financials">
-          <Card>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-muted-foreground">
-                      <th className="px-4 py-3 font-medium">Date</th>
-                      <th className="px-4 py-3 font-medium text-right">Cash</th>
-                      <th className="px-4 py-3 font-medium text-right">Debt</th>
-                      <th className="px-4 py-3 font-medium text-right">Burn / Qtr</th>
-                      <th className="px-4 py-3 font-medium text-right">Shares</th>
-                      <th className="px-4 py-3 font-medium text-right">Options</th>
-                      <th className="px-4 py-3 font-medium">Source</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {history.map((f) => (
-                      <tr key={f.financial_id} className="hover:bg-muted/30">
-                        <td className="px-4 py-2.5 font-mono text-xs">{f.effective_date || "-"}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.cash)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.debt)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtAud(f.quarterly_opex_burn)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtShares(f.shares_basic)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{fmtShares(f.options_outstanding)}</td>
-                        <td className="px-4 py-2.5">
-                          <Badge variant="secondary" className="text-[10px]">{f.extraction_method}</Badge>
-                        </td>
-                      </tr>
-                    ))}
-                    {history.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
-                          No financial data yet
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+      {activeTab === "capital" && (
+        <CapitalTab ticker={data.ticker} />
+      )}
 
-        {/* Documents tab */}
-        <TabsContent value="documents">
-          <Card>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-muted-foreground">
-                      <th className="px-4 py-3 font-medium">Type</th>
-                      <th className="px-4 py-3 font-medium">Title</th>
-                      <th className="px-4 py-3 font-medium">Date</th>
-                      <th className="px-4 py-3 font-medium">Status</th>
-                      <th className="px-4 py-3 font-medium w-12"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {documents.map((d) => (
-                      <tr key={d.document_id} className="hover:bg-muted/30">
-                        <td className="px-4 py-2.5">
-                          <Badge variant="secondary" className="text-[10px]">{d.doc_type}</Badge>
-                        </td>
-                        <td className="px-4 py-2.5 text-muted-foreground max-w-md truncate text-xs">
-                          {d.header || "-"}
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                          {d.announcement_date || "-"}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <span
-                            className={`text-xs font-medium ${
-                              d.parse_status === "parsed"
-                                ? "text-green-400"
-                                : d.parse_status === "failed"
-                                ? "text-red-400"
-                                : d.parse_status === "classified"
-                                ? "text-blue-400"
-                                : "text-yellow-400"
-                            }`}
-                            title={d.parse_error || undefined}
-                          >
-                            {d.parse_status}
-                          </span>
-                          {d.parse_status === "failed" && d.parse_error && (
-                            <p className="text-[10px] text-red-400/70 font-mono mt-0.5 truncate max-w-[180px]" title={d.parse_error}>
-                              {d.parse_error}
-                            </p>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {d.url && !d.url.startsWith("upload://") ? (
-                            <a
-                              href={d.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-primary hover:underline"
-                            >
-                              PDF
-                            </a>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                    {documents.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
-                          No documents yet
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      {activeTab === "documents" && (
+        <DocumentsTab ticker={data.ticker} />
+      )}
     </div>
   );
 }

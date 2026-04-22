@@ -48,11 +48,13 @@ from api.upload import bp as upload_bp
 from api.documents import bp as documents_bp
 from api.financials import bp as financials_bp
 from api.review import bp as review_bp
+from api.snapshot import bp as snapshot_bp
 
 app.register_blueprint(upload_bp)
 app.register_blueprint(documents_bp)
 app.register_blueprint(financials_bp)
 app.register_blueprint(review_bp)
+app.register_blueprint(snapshot_bp)
 
 
 # ---------------------------------------------------------------------------

@@ -271,9 +271,13 @@ def api_company_snapshot(ticker: str):
     cash_history = []
     for row in cash_rows:
         ql = _quarter_label(row["effective_date"])
+        burn_raw = row["quarterly_opex_burn"]
         point = {
             "quarter": ql,
+            "quarter_end_display": _fmt_date_display(row["effective_date"]),
             "cash_balance": row["cash"],
+            "burn": abs(burn_raw) if burn_raw is not None else None,
+            "burn_display": _fmt_aud(abs(burn_raw)) if burn_raw is not None else None,
         }
         if ql in event_quarters:
             point["marker"] = event_quarters[ql]

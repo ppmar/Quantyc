@@ -35,7 +35,10 @@ export type CapitalSection = {
 
 export type CashHistoryPoint = {
   quarter: string;
+  quarter_end_display: string;
   cash_balance: number;
+  burn: number | null;
+  burn_display: string | null;
   marker?: "placement" | "options_exercised" | "resource_update" | "drilling_result";
 };
 

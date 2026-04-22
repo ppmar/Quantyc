@@ -219,37 +219,48 @@ def api_company_snapshot(ticker: str):
             "prose": ". ".join(prose_parts) + "." if prose_parts else "",
         }
 
-    # ── Capital data (from securities issuances) ─────────────────────────
-    capital_rows = conn.execute(
-        """SELECT cf.effective_date, cf.announcement_date, cf.shares_basic,
-                  cf.options_outstanding, d.doc_type, d.header
-           FROM company_financials cf
-           JOIN companies c ON cf.company_id = c.company_id
-           JOIN documents d ON cf.document_id = d.document_id
-           WHERE c.ticker = ? AND cf.shares_basic IS NOT NULL
-           ORDER BY cf.effective_date DESC""",
-        (ticker,),
-    ).fetchall()
+    # ── Capital data ────────────────────────────────────────────────────
+    # 1) Prefer capital_structure_snapshots (2A-derived, authoritative)
+    latest_cs = None
+    try:
+        latest_cs = conn.execute(
+            """SELECT css.snapshot_date, css.shares_basic, css.shares_fd_naive,
+                      css.options_outstanding, css.performance_rights_count,
+                      css.doc_id
+               FROM capital_structure_snapshots css
+               WHERE css.ticker = ?
+               ORDER BY css.snapshot_date DESC
+               LIMIT 1""",
+            (ticker,),
+        ).fetchone()
+    except Exception:
+        pass  # table may not exist on older DBs
+
+    # 2) Fallback: legacy company_financials (only when no 2A snapshot exists)
+    legacy_cap = None
+    if latest_cs is None:
+        legacy_cap = conn.execute(
+            """SELECT cf.effective_date, cf.announcement_date, cf.shares_basic
+               FROM company_financials cf
+               JOIN companies c ON cf.company_id = c.company_id
+               WHERE c.ticker = ? AND cf.shares_basic IS NOT NULL
+               ORDER BY cf.effective_date DESC
+               LIMIT 1""",
+            (ticker,),
+        ).fetchone()
 
     capital_section = None
-    if capital_rows:
-        latest_cap = capital_rows[0]
-        shares_basic = latest_cap["shares_basic"]
-
-        # Find the most recent issuance event for prose
-        prose = ""
-        if len(capital_rows) >= 2:
-            prev = capital_rows[1]
-            prev_shares = prev["shares_basic"]
-            if prev_shares and shares_basic and shares_basic > prev_shares:
-                delta = shares_basic - prev_shares
-                ann_date = latest_cap["announcement_date"]
-                prose = f"Last issuance {_fmt_shares(delta)} shares {_relative_date(ann_date)}."
-
+    if latest_cs:
         capital_section = {
-            "shares_display": _fmt_shares(shares_basic),
+            "shares_display": _fmt_shares(latest_cs["shares_basic"]),
             "shares_label": "shares on issue",
-            "prose": prose,
+            "prose": "",
+        }
+    elif legacy_cap:
+        capital_section = {
+            "shares_display": _fmt_shares(legacy_cap["shares_basic"]),
+            "shares_label": "shares on issue",
+            "prose": "",
         }
 
     # ── Cash history for chart ───────────────────────────────────────────
@@ -335,7 +346,7 @@ def api_company_snapshot(ticker: str):
 
     # ── Tab visibility ───────────────────────────────────────────────────
     has_financials = len(cash_rows) > 0
-    has_capital = len(capital_rows) > 0
+    has_capital = capital_section is not None
     doc_count = conn.execute(
         "SELECT COUNT(*) as n FROM documents WHERE ticker = ?", (ticker,)
     ).fetchone()["n"]

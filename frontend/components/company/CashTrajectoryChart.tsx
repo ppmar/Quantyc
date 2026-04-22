@@ -39,8 +39,8 @@ function CustomTooltip({
 }
 
 function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
-  const hasBurn = data.every((d) => d.burn != null && d.burn_display != null);
-  if (!hasBurn) return null;
+  const hasBurn = data.every((d) => d.burn !== null && d.burn !== undefined && d.burn_display != null);
+  if (!hasBurn || data.length < 2) return null;
 
   const maxBurn = Math.max(...data.map((d) => d.burn!));
   const [hovered, setHovered] = useState<number | null>(null);

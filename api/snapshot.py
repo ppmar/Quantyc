@@ -168,13 +168,15 @@ def api_company_snapshot(ticker: str):
     ]
     meta_line = " · ".join(p for p in meta_parts if p)
 
-    # ── Cash data (from 5B extractions) ──────────────────────────────────
+    # ── Cash data (from 5B extractions only — these have burn data) ─────
     cash_rows = conn.execute(
         """SELECT cf.effective_date, cf.announcement_date, cf.cash, cf.debt,
                   cf.quarterly_opex_burn, cf.quarterly_invest_burn
            FROM company_financials cf
            JOIN companies c ON cf.company_id = c.company_id
+           JOIN documents d ON cf.document_id = d.document_id
            WHERE c.ticker = ? AND cf.cash IS NOT NULL
+                 AND d.doc_type IN ('appendix_5b', 'quarterly_activity')
            ORDER BY cf.effective_date ASC""",
         (ticker,),
     ).fetchall()

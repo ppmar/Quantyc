@@ -21,7 +21,7 @@ from .appendix_2a_schemas import (
     UnquotedInstrument,
 )
 
-PARSER_VERSION = "0.1.0"
+PARSER_VERSION = "0.2.0"
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────
@@ -137,25 +137,66 @@ _QUOTED_ROW_RE = re.compile(
 )
 
 
-def _extract_quoted_classes(part4_text: str) -> list[QuotedClass]:
-    """Extract quoted security classes from Part 4.1 section."""
-    # Find the text between 4.1 and 4.2 headers
-    m_start = _SECTION_41_START.search(part4_text)
-    m_end = _SECTION_42_START.search(part4_text)
+_QUOTED_OPTION_RE = re.compile(r"\boption\b|\bwarrant\b", re.I)
+_QUOTED_PERF_RE = re.compile(r"\bperformance\s+right", re.I)
+_QUOTED_CN_RE = re.compile(r"\bconvertible\s+note", re.I)
 
-    if not m_start:
-        return []
 
-    section_text = part4_text[m_start.end():m_end.start() if m_end else len(part4_text)]
+def _classify_quoted_row(description: str) -> str:
+    """Classify a quoted row description as share, option, performance_right, or convertible_note."""
+    if _QUOTED_OPTION_RE.search(description):
+        return "option"
+    if _QUOTED_PERF_RE.search(description):
+        return "performance_right"
+    if _QUOTED_CN_RE.search(description):
+        return "convertible_note"
+    return "share"
 
-    results = []
+
+def _extract_quoted_classes(section_text: str) -> tuple[list[QuotedClass], list[UnquotedInstrument]]:
+    """Parse a quoted securities section (Part 4.1 or Part 3.1).
+
+    Quoted options (e.g. AGYO listed in Part 3.1 of an Appendix 3H) are treated
+    as options, not as basic shares (HC4).
+
+    Returns:
+        - quoted_shares: rows classified as "share" — summed into shares_basic.
+        - quoted_non_shares: rows classified as option/perf_right/CN — appended
+          to the unquoted list so they flow into options_outstanding etc.
+    """
+    quoted_shares: list[QuotedClass] = []
+    quoted_non_shares: list[UnquotedInstrument] = []
+
     for m in _QUOTED_ROW_RE.finditer(section_text):
         code = m.group(1).strip()
         desc = m.group(2).strip()
         count = int(m.group(3).replace(",", ""))
-        results.append(QuotedClass(asx_code=code, description=desc, total_on_issue=count))
+        row_type = _classify_quoted_row(desc)
 
-    return results
+        if row_type == "share":
+            quoted_shares.append(QuotedClass(asx_code=code, description=desc, total_on_issue=count))
+        else:
+            # Build an UnquotedInstrument from the quoted non-share row
+            expiry = None
+            strike = None
+            if row_type == "option":
+                exp_m = re.search(r"EXPIRING\s+(\d{2}-[A-Z]{3}-\d{4})", desc)
+                if exp_m:
+                    expiry = _parse_expiry(exp_m.group(1))
+                strike_m = re.search(r"EX\s+\$([\d.]+)", desc)
+                if strike_m:
+                    strike = Decimal(strike_m.group(1))
+            quoted_non_shares.append(UnquotedInstrument(
+                asx_code=code,
+                description=desc,
+                instrument_type=row_type,
+                total_on_issue=count,
+                expiry_date=expiry,
+                strike_aud=strike,
+                raw_line=m.group(0).strip(),
+            ))
+
+    return quoted_shares, quoted_non_shares
 
 
 # ── Part 4.2: Unquoted securities ──────────────────────────────────────
@@ -210,16 +251,11 @@ _GENERIC_ROW_RE = re.compile(
 )
 
 
-def _extract_unquoted_list(part4_text: str) -> tuple[list[UnquotedInstrument], list[str]]:
-    """Extract unquoted instruments from Part 4.2 section.
+def _parse_unquoted_section(section_text: str) -> tuple[list[UnquotedInstrument], list[str]]:
+    """Parse an unquoted securities section (Part 4.2 or Part 3.2).
 
-    Returns (instruments, warnings).
+    Returns (instruments, warnings). Shared by 2A and 3H/3G parsers.
     """
-    m_start = _SECTION_42_START.search(part4_text)
-    if not m_start:
-        return [], []
-
-    section_text = part4_text[m_start.end():]
     warnings: list[str] = []
 
     # Find all generic rows first to know the universe
@@ -308,14 +344,21 @@ def _extract_unquoted_list(part4_text: str) -> tuple[list[UnquotedInstrument], l
         ))
         warnings.append(f"unquoted_row_unparsed: {raw_line}")
 
-    # Sort by order of appearance (by ASX code as proxy — maintain doc order)
-    # Re-sort based on original position in section_text
+    # Sort by order of appearance
     def _sort_key(inst: UnquotedInstrument) -> int:
         pos = section_text.find(inst.raw_line)
         return pos if pos >= 0 else 9999
     instruments.sort(key=_sort_key)
 
     return instruments, warnings
+
+
+def _extract_unquoted_list(part4_text: str) -> tuple[list[UnquotedInstrument], list[str]]:
+    """Extract unquoted instruments from Part 4.2 section."""
+    m_start = _SECTION_42_START.search(part4_text)
+    if not m_start:
+        return [], []
+    return _parse_unquoted_section(part4_text[m_start.end():])
 
 
 # ── Validation & reconciliation ────────────────────────────────────────
@@ -374,8 +417,15 @@ def parse(
     """
     part4_text = _locate_part_4_text(pdf_bytes)
 
-    quoted = _extract_quoted_classes(part4_text)
+    # Find section boundaries
+    m41 = _SECTION_41_START.search(part4_text)
+    m42 = _SECTION_42_START.search(part4_text)
+    quoted_text = part4_text[m41.end():m42.start() if m42 else len(part4_text)] if m41 else ""
+
+    quoted, quoted_non_shares = _extract_quoted_classes(quoted_text)
     unquoted, warnings = _extract_unquoted_list(part4_text)
+    # HC4: quoted options/perf rights go into unquoted list, not shares_basic
+    unquoted = list(quoted_non_shares) + unquoted
 
     shares_basic, shares_fd_naive, options, cn, pr = _validate_and_reconcile(
         quoted, unquoted, warnings

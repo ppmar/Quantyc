@@ -250,19 +250,36 @@ def _extract_securities(doc_id: int, pdf_bytes: bytes, normalize_from_2a) -> Non
     ticker = doc["ticker"]
     ann_date_str = doc["announcement_date"]
 
+    from datetime import date as date_type
+    from parsers.appendix_2a import ExtractionError, MalformedDocumentError, ReconciliationError
+
+    ann_date = date_type.fromisoformat(ann_date_str) if ann_date_str else date_type.today()
+
     # Try structured 2A parser
     if detect_profile(pdf_bytes):
         try:
-            from datetime import date as date_type
-            ann_date = date_type.fromisoformat(ann_date_str) if ann_date_str else date_type.today()
             result = parse_2a(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
-            normalize_from_2a(doc_id, result)
+            normalize_from_2a(doc_id, result, source_profile="appendix_2a")
             _mark_status(doc_id, "parsed")
             logger.info("Doc %d: parsed as Appendix 2A (basic=%d, fd=%d)",
                         doc_id, result.shares_basic, result.shares_fd_naive)
             return
-        except Exception as e:
-            logger.warning("Doc %d: 2A parser failed (%s), trying legacy extractor", doc_id, e)
+        except (ExtractionError, MalformedDocumentError, ReconciliationError) as e:
+            logger.warning("Doc %d: 2A parser failed (%s), trying 3H/3G", doc_id, e)
+
+    # Try 3H/3G parser
+    from parsers.appendix_3h import detect_profile as detect_3h, parse as parse_3h
+    matched, subtype = detect_3h(pdf_bytes)
+    if matched:
+        try:
+            result = parse_3h(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
+            normalize_from_2a(doc_id, result, source_profile=subtype)
+            _mark_status(doc_id, "parsed")
+            logger.info("Doc %d: parsed as %s (basic=%d, fd=%d)",
+                        doc_id, subtype, result.shares_basic, result.shares_fd_naive)
+            return
+        except (ExtractionError, MalformedDocumentError, ReconciliationError) as e:
+            logger.warning("Doc %d: 3H/3G parser failed (%s), trying legacy", doc_id, e)
 
     # Fallback: legacy issue_of_securities extractor
     result = extract_issue_of_securities(doc_id, pdf_bytes)

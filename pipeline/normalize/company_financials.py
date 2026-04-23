@@ -313,14 +313,15 @@ def normalize_from_presentation(document_id: int) -> bool:
     return True
 
 
-def normalize_from_2a(document_id: int, capital_structure) -> bool:
+def normalize_from_2a(document_id: int, capital_structure, source_profile: str = "appendix_2a") -> bool:
     """
-    Normalize Appendix 2A parsed result into company_financials +
+    Normalize Appendix 2A/3G/3H parsed result into company_financials +
     capital_structure_snapshots + unquoted_instruments.
 
     Args:
         document_id: the documents.document_id
-        capital_structure: Appendix2ACapitalStructure dataclass from parsers.appendix_2a
+        capital_structure: Appendix2ACapitalStructure dataclass
+        source_profile: 'appendix_2a', 'appendix_3g', or 'appendix_3h'
     """
     conn = get_connection()
 
@@ -378,7 +379,7 @@ def normalize_from_2a(document_id: int, capital_structure) -> bool:
                 parser_version, parsed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                str(document_id), ticker, effective_date, "appendix_2a",
+                str(document_id), ticker, effective_date, source_profile,
                 cs.shares_basic, cs.shares_fd_naive, cs.options_outstanding,
                 cs.convertible_notes_face_count, cs.performance_rights_count,
                 cs.parser_version, cs.parsed_at.isoformat(),

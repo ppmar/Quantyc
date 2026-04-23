@@ -357,14 +357,12 @@ def normalize_from_2a(document_id: int, capital_structure, source_profile: str =
            (company_id, document_id, effective_date, announcement_date,
             shares_basic, shares_fd, options_outstanding,
             perf_rights_outstanding, convertibles_face_value,
-            extraction_method, confidence,
             needs_review, review_reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             company_id, document_id, effective_date, announcement_date,
             cs.shares_basic, cs.shares_fd_naive, cs.options_outstanding,
             cs.performance_rights_count, cs.convertible_notes_face_count,
-            "rule", "high",
             1 if needs_review else 0, review_reason, now,
         ),
     )

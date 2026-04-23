@@ -35,10 +35,8 @@ ASX_CDN_BASE = "https://cdn-api.markitdigital.com/apiman-gateway/ASX/asx-researc
 HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 PDF_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/pdf"}
 
-# Download and parse these doc types directly
+# Download and parse these doc types only
 TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities"}
-# Also download these to scan for embedded 5B forms
-SCAN_DOC_TYPES = {"quarterly_activity"}
 
 
 def _get_entity_xid(ticker: str) -> int | None:
@@ -152,7 +150,7 @@ def poll_ticker(ticker: str, count: int = 100, status: dict | None = None) -> di
 
         # Step 3: classify by headline — only proceed if it's a target or scan type
         doc_type = classify_headline(header)
-        if doc_type not in TARGET_DOC_TYPES and doc_type not in SCAN_DOC_TYPES:
+        if doc_type not in TARGET_DOC_TYPES:
             stats["not_5b"] += 1
             if status:
                 status["docs_done"] = status.get("docs_done", 0) + 1
@@ -211,7 +209,6 @@ def poll_ticker(ticker: str, count: int = 100, status: dict | None = None) -> di
 
 def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
     """Classify, extract, and normalize a document immediately."""
-    from pipeline.classify import contains_standardized_form
     from pipeline.extractors.appendix_5b import extract_appendix_5b
     from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_2a
 
@@ -224,38 +221,13 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
     conn.close()
 
     if doc_type == "appendix_5b":
-        # Headline says 5B — extract directly
         result = extract_appendix_5b(doc_id, pdf_bytes)
         if result:
             normalize_from_5b(doc_id)
             _mark_status(doc_id, "parsed")
-        # else: gate already marked doc as failed with specific parse_error
 
     elif doc_type == "issue_of_securities":
-        # Try Appendix 2A parser first (structured Part 4 extraction)
         _extract_securities(doc_id, pdf_bytes, normalize_from_2a)
-
-    elif doc_type in SCAN_DOC_TYPES:
-        # Quarterly activity report — scan for embedded 5B
-        found_type = contains_standardized_form(pdf_bytes)
-        if found_type == "appendix_5b":
-            logger.info("Doc %d: found embedded 5B in quarterly report", doc_id)
-            # Reclassify as appendix_5b
-            conn = get_connection()
-            conn.execute(
-                "UPDATE documents SET doc_type = 'appendix_5b' WHERE document_id = ?",
-                (doc_id,),
-            )
-            conn.commit()
-            conn.close()
-            result = extract_appendix_5b(doc_id, pdf_bytes)
-            if result:
-                normalize_from_5b(doc_id)
-                _mark_status(doc_id, "parsed")
-            # else: gate already marked doc as failed with specific parse_error
-        else:
-            # No embedded 5B found — skip
-            _mark_status(doc_id, "skipped")
 
 
 def _extract_securities(doc_id: int, pdf_bytes: bytes, normalize_from_2a) -> None:

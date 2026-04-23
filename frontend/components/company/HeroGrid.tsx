@@ -24,7 +24,7 @@ export function HeroGrid({
       )}
       {capital && (
         <HeroStat
-          label="Capital Structure"
+          label="Quoted Shares"
           value={capital.shares_display}
           subtext={capital.shares_label}
           caption={[capital.prose, capital.fully_diluted_prose].filter(Boolean).join(" ") || undefined}

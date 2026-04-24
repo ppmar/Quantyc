@@ -39,14 +39,14 @@ function CustomTooltip({
 }
 
 function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
-  const hasBurn = data.every((d) => d.burn !== null && d.burn !== undefined && d.burn_display != null);
-  if (!hasBurn || data.length < 2) return null;
+  const burnPoints = data.filter((d) => d.burn != null && d.burn_display != null);
+  if (burnPoints.length < 2) return null;
 
-  const maxBurn = Math.max(...data.map((d) => d.burn!));
+  const maxBurn = Math.max(...burnPoints.map((d) => d.burn!));
   const [hovered, setHovered] = useState<number | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
 
-  const latestBurn = data[data.length - 1];
+  const latestBurn = burnPoints[burnPoints.length - 1];
 
   const handleEnter = useCallback((i: number) => setHovered(i), []);
   const handleLeave = useCallback(() => setHovered(null), []);
@@ -64,12 +64,11 @@ function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
         )}
       </div>
       <div className="relative h-9 flex items-end gap-px">
-        {data.map((point, i) => {
-          const isLast = i === data.length - 1;
+        {burnPoints.map((point, i) => {
+          const isLast = i === burnPoints.length - 1;
           const isHovered = hovered === i;
           const heightPct =
             maxBurn > 0 ? Math.max((point.burn! / maxBurn) * 100, 4) : 4;
-          const baseOpacity = isLast ? 0.85 : 0.55;
 
           return (
             <div
@@ -87,7 +86,6 @@ function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
                     : isLast
                       ? "rgba(250,250,250,0.85)"
                       : "rgba(161,161,170,0.55)",
-                  opacity: isHovered ? 1 : baseOpacity,
                 }}
               />
               {isHovered && (

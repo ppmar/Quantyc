@@ -113,7 +113,6 @@ export function CashTrajectoryChart({
 }) {
   if (data.length < 3) return null;
 
-  const markers = data.filter((d) => d.marker);
   const latest = data[data.length - 1];
 
   // XAxis ticks: first, middle, last
@@ -186,18 +185,6 @@ export function CashTrajectoryChart({
                 stroke="none"
               />
             )}
-            {/* Capital event markers — open amber dots */}
-            {markers.map((m) => (
-              <ReferenceDot
-                key={m.quarter}
-                x={m.quarter}
-                y={m.cash_balance}
-                r={4}
-                fill="transparent"
-                stroke="#f5b642"
-                strokeWidth={2}
-              />
-            ))}
           </AreaChart>
         </ResponsiveContainer>
       </div>

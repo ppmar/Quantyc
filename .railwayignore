@@ -1,0 +1,15 @@
+tests/
+.venv/
+__pycache__/
+*.pyc
+.git/
+data/
+.claude/
+*.db
+*.sqlite
+footer.md
+spec_ingestion.md
+specs_validation.md
+frontend_refonte.md
+backend_spec.md
+appendix_3H_3G.md

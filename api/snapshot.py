@@ -264,37 +264,17 @@ def api_company_snapshot(ticker: str):
         }
 
     # ── Cash history for chart ───────────────────────────────────────────
-    # Get capital events to mark on the chart
-    capital_events = conn.execute(
-        """SELECT cf.effective_date, d.doc_type
-           FROM company_financials cf
-           JOIN companies c ON cf.company_id = c.company_id
-           JOIN documents d ON cf.document_id = d.document_id
-           WHERE c.ticker = ? AND cf.shares_basic IS NOT NULL
-                 AND d.doc_type IN ('issue_of_securities', 'placement')
-           ORDER BY cf.effective_date ASC""",
-        (ticker,),
-    ).fetchall()
-    event_quarters = {}
-    for ev in capital_events:
-        ql = _quarter_label(ev["effective_date"])
-        if ql:
-            event_quarters[ql] = "placement"
-
     cash_history = []
     for row in cash_rows:
         ql = _quarter_label(row["effective_date"])
         burn_raw = row["quarterly_opex_burn"]
-        point = {
+        cash_history.append({
             "quarter": ql,
             "quarter_end_display": _fmt_date_display(row["effective_date"]),
             "cash_balance": row["cash"],
             "burn": abs(burn_raw) if burn_raw is not None else None,
             "burn_display": _fmt_aud(abs(burn_raw)) if burn_raw is not None else None,
-        }
-        if ql in event_quarters:
-            point["marker"] = event_quarters[ql]
-        cash_history.append(point)
+        })
 
     # ── Activity feed ────────────────────────────────────────────────────
     # Pull recent parsed documents as activity events

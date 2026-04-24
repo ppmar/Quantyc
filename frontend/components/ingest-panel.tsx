@@ -8,8 +8,42 @@ import { Download, Play, RefreshCw } from "lucide-react";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const DEFAULT_SCAN_COUNT = 200;
 const DEFAULT_TICKERS = [
-  "DEV", "LYC", "PLS", "BOE", "WR1",
-  "NVA", "AGY", "MCR", "VUL", "GMD", "CEL",
+  // Majors & mid-tier
+  "BHP", "RIO", "FMG", "S32", "NST", "EVN", "NEM", "RRL", "PRU", "RMS",
+  "GMD", "SLR", "CMM", "WGX", "RED", "SBM", "GOR", "DEG", "BGL", "PNR",
+  "SXG", "WAF", "CAI", "DEV", "IGO", "MIN",
+  // Lithium
+  "LYC", "PLS", "CXO", "LTR", "SYR", "GLN", "INR", "AZS", "LKE", "LPD",
+  "LPI", "LTM", "A11", "ASN", "AZL", "CHR", "CTR", "DLI", "ESS", "EV1",
+  "FFX", "GL1", "GT1", "JRL", "LIT", "PL3", "PMT", "SYA", "TLG", "ZEU",
+  // Base metals
+  "OZL", "SFR", "AIS", "HGO", "AVM", "HCH", "29M", "C29", "CUL", "CUX",
+  "FEX", "HAV", "IVR", "MMG", "NIC", "PM8", "QPM", "STM", "STK", "TMR", "XRF",
+  // Gold juniors
+  "AR3", "CHN", "CNJ", "CYM", "ERM", "FDM", "HMY",
+  // Uranium
+  "PDN", "DYL", "LOT", "BMN", "PEN", "TOE", "ALX", "AGE", "92E", "EL8",
+  "AEE", "BKY", "ERA", "SLX", "VMY",
+  // Mineral sands & rare earths
+  "ILU", "ARU", "HAS", "NTU", "PEK", "ASM", "KRM",
+  // Nickel & battery metals
+  "PAN", "AR2", "POS", "AUZ", "NWC", "JMS", "BMM", "EMN", "TMT",
+  // Iron ore
+  "GRR", "MGX", "RHI", "MGT", "CIA", "KZR", "RMC",
+  // Diversified / other
+  "BOE", "WR1", "NVA", "AGY", "MCR", "VUL", "CEL",
+  "NEW", "CLQ", "COB", "MNS", "GRE", "SVM", "AUT", "EQX", "MLX", "VMS",
+  "ELT", "RXL", "STG", "GWR", "NXM", "MM8", "ASO", "AQI", "BMO", "GED",
+  "KSN", "DTM", "BGD", "FG1", "KAU", "LM8", "PGO", "RKB", "TG1", "VRC",
+  "MEG", "A1M", "RMX", "AUC", "EMR", "PUR", "KCN", "AZY", "FAU", "BTR",
+  "KAL", "BTN", "TBR", "TIE", "PDI", "RSG", "SPR", "TAM", "WGC", "BCN",
+  "OKR", "TRM", "SVY", "POL",
+  // International (TSX / NYSE)
+  "AEM", "ABX", "GOLD", "BTG", "KGC", "NGD", "WPM", "FNV", "ELD", "IMG",
+  "OR", "CG", "AR", "LUG", "CS", "FM", "TECK", "HBM", "IVN", "TKO",
+  "NFG", "MAG", "SSRM", "PAAS", "OGC", "OSK", "SEA", "TFPM", "TGZ", "TXG",
+  "K", "LGD", "LNR", "OGN", "STLR", "ARTG", "AMM", "SIL", "SSL", "USGD",
+  "VIT", "FOM", "GCM", "KNT", "MOX", "NG", "P", "PRB", "RNX", "ABRA",
 ];
 
 interface ScheduleInfo {

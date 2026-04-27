@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
 
 export function CompanyHeader({
   ticker,
@@ -13,20 +12,20 @@ export function CompanyHeader({
   return (
     <div>
       <Link
-        href="/"
-        className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mb-4"
+        href="/companies"
+        className="inline-flex items-center gap-1 text-[13px] text-zinc-600 hover:text-zinc-400 transition-colors mb-5"
       >
-        <ArrowLeft className="h-3.5 w-3.5" /> Dashboard
+        <span className="text-[11px]">&larr;</span> Companies
       </Link>
       <div className="space-y-1">
-        <p className="text-sm font-medium tracking-wider text-[#f5b642]">
+        <p className="text-[13px] font-mono font-medium tracking-wider text-amber">
           {ticker}
         </p>
         <h1 className="text-3xl font-medium tracking-tight text-zinc-50">
           {name}
         </h1>
         {metaLine && (
-          <p className="text-sm text-zinc-500">{metaLine}</p>
+          <p className="text-[13px] text-zinc-500">{metaLine}</p>
         )}
       </div>
     </div>

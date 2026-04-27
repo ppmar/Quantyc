@@ -2,55 +2,44 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Building2,
-  FileText,
-  TrendingUp,
-  AlertTriangle,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
 
 const links = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/companies", label: "Companies", icon: Building2 },
-  { href: "/documents", label: "Documents", icon: FileText },
-  { href: "/valuations", label: "Valuations", icon: TrendingUp },
-  { href: "/review", label: "Review", icon: AlertTriangle },
+  { href: "/", label: "Overview" },
+  { href: "/companies", label: "Companies" },
+  { href: "/documents", label: "Documents" },
+  { href: "/review", label: "Review" },
 ];
 
 export function Nav() {
   const pathname = usePathname();
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-7xl items-center px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-6">
+    <nav className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur-md">
+      <div className="mx-auto flex h-12 max-w-6xl items-center justify-between px-6 lg:px-8">
+        <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-primary flex items-center justify-center">
-              <span className="text-xs font-bold text-primary-foreground">Q</span>
-            </div>
-            <span className="font-semibold tracking-tight text-foreground">
-              Quantyc
+            <span className="text-[13px] font-semibold tracking-wide text-amber">
+              QUANTYC
             </span>
           </Link>
-          <div className="hidden md:flex items-center gap-1">
-            {links.map(({ href, label, icon: Icon }) => {
+          <div className="flex items-center gap-1">
+            {links.map(({ href, label }) => {
               const active =
                 href === "/" ? pathname === "/" : pathname.startsWith(href);
               return (
                 <Link
                   key={href}
                   href={href}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  className={`relative px-3 py-3.5 text-[13px] transition-colors ${
                     active
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                  )}
+                      ? "text-zinc-100"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
                 >
-                  <Icon className="h-3.5 w-3.5" />
                   {label}
+                  {active && (
+                    <span className="absolute bottom-0 left-3 right-3 h-px bg-zinc-100" />
+                  )}
                 </Link>
               );
             })}

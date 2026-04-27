@@ -14,9 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Quantyc — ASX Miner Intelligence",
-  description:
-    "Automated valuation pipeline for ASX junior mining companies",
+  title: "Quantyc",
+  description: "Mining intelligence terminal",
 };
 
 export default function RootLayout({
@@ -27,11 +26,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col tabular-nums">
         <Nav />
-        <main className="flex-1 mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+        <main className="flex-1 mx-auto w-full max-w-6xl px-6 lg:px-8 py-8">
           {children}
         </main>
       </body>

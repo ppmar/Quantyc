@@ -46,9 +46,6 @@ export function CapitalTab({ ticker }: { ticker: string }) {
           <tr className="text-left text-zinc-500 border-b border-white/[0.06]">
             <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider">Date</th>
             <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Shares</th>
-            <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Options</th>
-            <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Perf Rights</th>
-            <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Convertibles</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-white/[0.04]">
@@ -56,9 +53,6 @@ export function CapitalTab({ ticker }: { ticker: string }) {
             <tr key={f.financial_id} className="hover:bg-white/[0.02]">
               <td className="px-3 py-2.5 text-xs text-zinc-400">{f.effective_date}</td>
               <td className="px-3 py-2.5 text-right text-zinc-200">{fmtShares(f.shares_basic)}</td>
-              <td className="px-3 py-2.5 text-right text-zinc-400">{fmtShares(f.options_outstanding)}</td>
-              <td className="px-3 py-2.5 text-right text-zinc-400">{fmtShares(f.perf_rights_outstanding)}</td>
-              <td className="px-3 py-2.5 text-right text-zinc-400">{fmtShares(f.convertibles_face_value)}</td>
             </tr>
           ))}
         </tbody>

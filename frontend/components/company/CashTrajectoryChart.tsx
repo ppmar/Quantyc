@@ -38,21 +38,19 @@ function CustomTooltip({
   );
 }
 
+const STRIP_HEIGHT = 36; // px
+
 function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
   const burnPoints = data.filter((d) => d.burn != null && d.burn_display != null);
   if (burnPoints.length < 2) return null;
 
   const maxBurn = Math.max(...burnPoints.map((d) => d.burn!));
   const [hovered, setHovered] = useState<number | null>(null);
-  const stripRef = useRef<HTMLDivElement>(null);
 
   const latestBurn = burnPoints[burnPoints.length - 1];
 
-  const handleEnter = useCallback((i: number) => setHovered(i), []);
-  const handleLeave = useCallback(() => setHovered(null), []);
-
   return (
-    <div className="mt-1" ref={stripRef}>
+    <div className="mt-3">
       <div className="flex items-baseline justify-between mb-1.5">
         <p className="text-[10px] uppercase tracking-wider text-zinc-600">
           Burn / quarter
@@ -63,24 +61,28 @@ function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
           </p>
         )}
       </div>
-      <div className="relative h-9 flex items-end gap-px">
+      <div
+        className="flex items-end gap-[2px]"
+        style={{ height: STRIP_HEIGHT }}
+      >
         {burnPoints.map((point, i) => {
           const isLast = i === burnPoints.length - 1;
           const isHovered = hovered === i;
-          const heightPct =
-            maxBurn > 0 ? Math.max((point.burn! / maxBurn) * 100, 4) : 4;
+          const ratio = maxBurn > 0 ? point.burn! / maxBurn : 0;
+          const barHeight = Math.max(Math.round(ratio * STRIP_HEIGHT), 2);
 
           return (
             <div
               key={point.quarter}
-              className="relative flex-1 flex items-end"
-              onMouseEnter={() => handleEnter(i)}
-              onMouseLeave={handleLeave}
+              className="relative flex-1"
+              style={{ height: STRIP_HEIGHT }}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
             >
               <div
-                className="w-full rounded-sm transition-opacity duration-[120ms] ease-in-out"
+                className="absolute bottom-0 left-0 right-0 rounded-sm transition-colors duration-[120ms] ease-in-out"
                 style={{
-                  height: `${heightPct}%`,
+                  height: barHeight,
                   backgroundColor: isHovered
                     ? "rgba(250,250,250,1)"
                     : isLast
@@ -89,7 +91,7 @@ function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
                 }}
               />
               {isHovered && (
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-10 pointer-events-none">
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-10 pointer-events-none">
                   <div className="bg-zinc-900 border border-white/10 rounded px-2 py-1 text-[10px] whitespace-nowrap">
                     <span className="text-zinc-400">{point.quarter}</span>{" "}
                     <span className="text-zinc-100">{point.burn_display}</span>

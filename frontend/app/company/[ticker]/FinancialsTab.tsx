@@ -58,7 +58,6 @@ export function FinancialsTab({ ticker }: { ticker: string }) {
             <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Debt</th>
             <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Burn / Qtr</th>
             <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Shares</th>
-            <th className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-right">Options</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-white/[0.04]">
@@ -69,7 +68,6 @@ export function FinancialsTab({ ticker }: { ticker: string }) {
               <td className="px-3 py-2.5 text-right text-zinc-400">{fmtAud(f.debt)}</td>
               <td className="px-3 py-2.5 text-right text-zinc-400">{fmtAud(f.quarterly_opex_burn)}</td>
               <td className="px-3 py-2.5 text-right text-zinc-400">{fmtShares(f.shares_basic)}</td>
-              <td className="px-3 py-2.5 text-right text-zinc-400">{fmtShares(f.options_outstanding)}</td>
             </tr>
           ))}
         </tbody>

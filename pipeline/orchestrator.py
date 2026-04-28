@@ -69,13 +69,13 @@ def extract_classified() -> dict:
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
     from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities
 
-    STANDARDIZED_TYPES = {"appendix_5b", "issue_of_securities"}
+    STANDARDIZED_TYPES = {"appendix_5b", "issue_of_securities", "resource_update"}
 
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
     conn = get_connection()
     docs = conn.execute(
-        """SELECT document_id, doc_type, url, header
+        """SELECT document_id, doc_type, url, header, ticker, announcement_date
            FROM documents WHERE parse_status = 'classified'
            ORDER BY announcement_date DESC"""
     ).fetchall()
@@ -98,7 +98,8 @@ def extract_classified() -> dict:
                 continue
             _extract_doc(doc_id, doc_type, pdf_bytes, stats,
                          extract_appendix_5b, extract_issue_of_securities,
-                         normalize_from_5b, normalize_from_securities)
+                         normalize_from_5b, normalize_from_securities,
+                         ticker=doc["ticker"], announcement_date=doc["announcement_date"])
             del pdf_bytes
 
         elif doc_type in SCAN_TYPES:
@@ -114,7 +115,8 @@ def extract_classified() -> dict:
                 _update_doc_type(doc_id, found_type)
                 _extract_doc(doc_id, found_type, pdf_bytes, stats,
                              extract_appendix_5b, extract_issue_of_securities,
-                             normalize_from_5b, normalize_from_securities)
+                             normalize_from_5b, normalize_from_securities,
+                             ticker=doc["ticker"], announcement_date=doc["announcement_date"])
             else:
                 _mark_skipped(doc_id)
                 stats["skipped"] += 1
@@ -131,7 +133,8 @@ def extract_classified() -> dict:
 
 def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
                  extract_appendix_5b, extract_issue_of_securities,
-                 normalize_from_5b, normalize_from_securities):
+                 normalize_from_5b, normalize_from_securities,
+                 ticker=None, announcement_date=None):
     """Run the appropriate extractor + normalizer for a document."""
     if doc_type == "appendix_5b":
         result = extract_appendix_5b(doc_id, pdf_bytes)
@@ -152,6 +155,127 @@ def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
         else:
             _mark_failed(doc_id, "extraction_empty")
             stats["failed"] += 1
+
+    elif doc_type == "resource_update":
+        _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats)
+
+
+def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats):
+    """Parse a JORC resource update and persist to projects + resources."""
+    from datetime import date as date_type, datetime, timezone
+    from parsers.jorc_resource_estimate import detect_profile, parse
+    from parsers.appendix_2a import ExtractionError, MalformedDocumentError
+
+    if not ticker or not announcement_date:
+        _mark_failed(doc_id, "missing_ticker_or_date")
+        stats["failed"] += 1
+        return
+
+    if not detect_profile(pdf_bytes):
+        _mark_skipped(doc_id)
+        stats["skipped"] += 1
+        return
+
+    ann_date = announcement_date
+    if isinstance(ann_date, str):
+        ann_date = date_type.fromisoformat(ann_date)
+
+    try:
+        estimate = parse(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
+    except (ExtractionError, MalformedDocumentError) as e:
+        _mark_failed(doc_id, str(e))
+        stats["failed"] += 1
+        return
+
+    conn = get_connection()
+    try:
+        # Look up company_id
+        row = conn.execute("SELECT company_id FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+        if not row:
+            _mark_failed(doc_id, "company_not_found")
+            stats["failed"] += 1
+            return
+        company_id = row["company_id"]
+
+        # Project bootstrap: look up or insert
+        project_id = _get_or_create_project(conn, company_id, estimate.project_name)
+
+        # Insert commodity association
+        conn.execute(
+            """INSERT OR IGNORE INTO project_commodities (project_id, commodity, is_primary)
+               VALUES (?, ?, 1)""",
+            (project_id, estimate.commodity),
+        )
+
+        # Insert resource rows (skip Total rows — they're derived)
+        now = datetime.now(timezone.utc).isoformat()
+        for row in estimate.rows:
+            if row.category == "Total":
+                continue
+            conn.execute(
+                """INSERT INTO resources
+                   (project_id, document_id, effective_date, commodity,
+                    resource_or_reserve, category, tonnes, grade, grade_unit,
+                    contained_metal, contained_metal_unit,
+                    cutoff_grade, cutoff_grade_unit,
+                    attributable_contained_metal, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)""",
+                (
+                    project_id, doc_id, estimate.snapshot_date.isoformat(),
+                    estimate.commodity, estimate.resource_or_reserve,
+                    row.category,
+                    float(row.tonnes_mt) if row.tonnes_mt is not None else None,
+                    float(row.grade) if row.grade is not None else None,
+                    row.grade_unit,
+                    float(row.contained_metal) if row.contained_metal is not None else None,
+                    row.contained_metal_unit,
+                    float(estimate.cutoff_grade) if estimate.cutoff_grade is not None else None,
+                    estimate.cutoff_grade_unit,
+                    now,
+                ),
+            )
+
+        conn.commit()
+        _mark_parsed(doc_id)
+        stats["extracted"] += 1
+        logger.info(
+            "Extracted JORC resource for %s — %s (%s): %d rows",
+            ticker, estimate.project_name, estimate.commodity, len(estimate.rows),
+        )
+    except Exception as e:
+        conn.rollback()
+        _mark_failed(doc_id, f"resource_persist_error:{e}")
+        stats["failed"] += 1
+        logger.exception("Failed to persist resource update for doc %d", doc_id)
+    finally:
+        conn.close()
+
+
+def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
+    """Look up a project by (company_id, project_name) or create it."""
+    from datetime import datetime, timezone
+
+    # Case-insensitive match, strip trailing Project/Deposit/Mine
+    import re
+    clean_name = re.sub(r"\s+(?:Project|Deposit|Mine|Operation)\s*$", "", project_name, flags=re.I).strip()
+
+    row = conn.execute(
+        """SELECT project_id FROM projects
+           WHERE company_id = ? AND LOWER(project_name) = LOWER(?)
+           ORDER BY created_at DESC LIMIT 1""",
+        (company_id, clean_name),
+    ).fetchone()
+
+    if row:
+        return row["project_id"]
+
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        """INSERT INTO projects (company_id, project_name, created_at)
+           VALUES (?, ?, ?)""",
+        (company_id, clean_name, now),
+    )
+    return cursor.lastrowid
 
 
 def _update_doc_type(doc_id: int, doc_type: str) -> None:

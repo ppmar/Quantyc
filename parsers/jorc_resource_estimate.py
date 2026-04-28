@@ -138,12 +138,17 @@ _EFFECTIVE_DATE_PATTERNS = [
 ]
 
 
-def _infer_commodity(text: str) -> Optional[str]:
-    """Infer primary commodity from text."""
+def _infer_commodity(text: str) -> tuple[Optional[str], list[str]]:
+    """Infer primary commodity from text. Returns (commodity, warnings)."""
+    matches = []
     for pattern, code in _COMMODITY_MAP:
         if pattern.search(text):
-            return code
-    return None
+            matches.append(code)
+    if not matches:
+        return None, []
+    if len(matches) > 1:
+        return matches[0], [f"polymetallic_deposit_detected:{'+'.join(matches)}_using_{matches[0]}"]
+    return matches[0], []
 
 
 def _extract_project_name(text: str) -> Optional[str]:
@@ -503,7 +508,8 @@ def parse(
         raise MalformedDocumentError("project_name_not_found")
 
     # Commodity
-    commodity = _infer_commodity(all_text)
+    commodity, commodity_warnings = _infer_commodity(all_text)
+    warnings.extend(commodity_warnings)
     if not commodity:
         warnings.append("commodity_not_inferred")
         commodity = "Unknown"

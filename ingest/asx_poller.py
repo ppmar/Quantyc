@@ -36,7 +36,7 @@ HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 PDF_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/pdf"}
 
 # Download and parse these doc types directly
-TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities"}
+TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities", "resource_update"}
 # Also download these to scan for embedded 5B forms
 SCAN_DOC_TYPES = {"quarterly_activity"}
 
@@ -232,6 +232,9 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
     elif doc_type == "issue_of_securities":
         _extract_securities(doc_id, pdf_bytes, normalize_from_2a)
 
+    elif doc_type == "resource_update":
+        _extract_resource_update(doc_id, pdf_bytes)
+
     elif doc_type in SCAN_DOC_TYPES:
         # Quarterly activity report — scan for embedded 5B
         found_type = contains_standardized_form(pdf_bytes)
@@ -250,6 +253,112 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
                 _mark_status(doc_id, "parsed")
         else:
             _mark_status(doc_id, "skipped")
+
+
+def _extract_resource_update(doc_id: int, pdf_bytes: bytes) -> None:
+    """Parse a JORC resource estimate and persist to projects + resources."""
+    from parsers.jorc_resource_estimate import detect_profile as detect_jorc, parse as parse_jorc
+    from parsers.appendix_2a import ExtractionError, MalformedDocumentError
+
+    conn = get_connection()
+    doc = conn.execute(
+        "SELECT ticker, announcement_date FROM documents WHERE document_id = ?", (doc_id,)
+    ).fetchone()
+    conn.close()
+
+    if not doc:
+        _mark_status(doc_id, "failed", "missing_document_row")
+        return
+
+    ticker = doc["ticker"]
+    ann_date_str = doc["announcement_date"]
+
+    from datetime import date as date_type
+    ann_date = date_type.fromisoformat(ann_date_str) if ann_date_str else date_type.today()
+
+    if not detect_jorc(pdf_bytes):
+        _mark_status(doc_id, "skipped")
+        return
+
+    try:
+        result = parse_jorc(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
+    except (ExtractionError, MalformedDocumentError) as e:
+        logger.warning("Doc %d: JORC parser failed: %s", doc_id, e)
+        _mark_status(doc_id, "failed", f"jorc_parse_error:{e}")
+        return
+
+    # Persist: bootstrap project + insert resource rows
+    _persist_jorc_estimate(doc_id, ticker, result)
+    _mark_status(doc_id, "parsed")
+    logger.info("Doc %d: parsed JORC for %s — %s %s, %d rows",
+                doc_id, ticker, result.project_name, result.commodity, len(result.rows))
+
+
+def _persist_jorc_estimate(doc_id: int, ticker: str, estimate) -> None:
+    """Write JORC estimate to projects + resources tables."""
+    from datetime import datetime, timezone
+
+    conn = get_connection()
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Get or create company
+    company = conn.execute("SELECT company_id FROM companies WHERE ticker = ?", (ticker,)).fetchone()
+    if not company:
+        cursor = conn.execute(
+            "INSERT INTO companies (ticker, first_seen_at, last_updated_at) VALUES (?, ?, ?)",
+            (ticker, now, now),
+        )
+        company_id = cursor.lastrowid
+    else:
+        company_id = company["company_id"]
+
+    # Look up or create project (case-insensitive match on company_id + project_name)
+    project = conn.execute(
+        "SELECT project_id FROM projects WHERE company_id = ? AND LOWER(project_name) = LOWER(?)",
+        (company_id, estimate.project_name),
+    ).fetchone()
+
+    if project:
+        project_id = project["project_id"]
+    else:
+        cursor = conn.execute(
+            "INSERT INTO projects (company_id, project_name, created_at) VALUES (?, ?, ?)",
+            (company_id, estimate.project_name, now),
+        )
+        project_id = cursor.lastrowid
+
+        # Insert primary commodity
+        conn.execute(
+            "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, ?, 1)",
+            (project_id, estimate.commodity),
+        )
+
+    # Insert resource rows
+    for row in estimate.rows:
+        conn.execute(
+            """INSERT INTO resources
+               (project_id, document_id, effective_date, commodity,
+                resource_or_reserve, category, tonnes, grade, grade_unit,
+                contained_metal, contained_metal_unit,
+                cutoff_grade, cutoff_grade_unit, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                project_id, doc_id, estimate.snapshot_date.isoformat(),
+                estimate.commodity, estimate.resource_or_reserve,
+                row.category,
+                float(row.tonnes_mt) if row.tonnes_mt is not None else None,
+                float(row.grade) if row.grade is not None else None,
+                row.grade_unit,
+                float(row.contained_metal) if row.contained_metal is not None else None,
+                row.contained_metal_unit,
+                float(estimate.cutoff_grade) if estimate.cutoff_grade is not None else None,
+                estimate.cutoff_grade_unit,
+                now,
+            ),
+        )
+
+    conn.commit()
+    conn.close()
 
 
 def _extract_securities(doc_id: int, pdf_bytes: bytes, normalize_from_2a) -> None:

@@ -182,7 +182,11 @@ CREATE TABLE IF NOT EXISTS resources (
     category          TEXT    NOT NULL,            -- Measured|Indicated|Inferred|Proven|Probable
     tonnes            REAL,
     grade             REAL,
+    grade_unit        TEXT,
     contained_metal   REAL,
+    contained_metal_unit TEXT,
+    cutoff_grade      REAL,
+    cutoff_grade_unit TEXT,
     attributable_contained_metal REAL,
     created_at        TEXT    NOT NULL
 );

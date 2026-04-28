@@ -23,8 +23,28 @@ def init_db():
     if MIGRATIONS_DIR.exists():
         for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
             with open(migration) as f:
-                conn.executescript(f.read())
+                try:
+                    conn.executescript(f.read())
+                except Exception:
+                    pass  # migrations should be idempotent
+    # Add columns to existing tables (safe: ignores if already present)
+    _safe_add_columns(conn)
     conn.close()
+
+
+def _safe_add_columns(conn):
+    """Add columns that may be missing from older DBs."""
+    additions = [
+        ("resources", "grade_unit", "TEXT"),
+        ("resources", "contained_metal_unit", "TEXT"),
+        ("resources", "cutoff_grade", "REAL"),
+        ("resources", "cutoff_grade_unit", "TEXT"),
+    ]
+    for table, col, col_type in additions:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass  # column already exists
 
 
 if __name__ == "__main__":

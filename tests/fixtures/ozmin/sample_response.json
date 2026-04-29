@@ -1,0 +1,60 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "deposit_name": "Hemi",
+        "operator_name": "De Grey Mining Limited",
+        "commodities": "Gold",
+        "state": "WA",
+        "operating_status": "Resource Definition"
+      },
+      "geometry": {"type": "Point", "coordinates": [119.73, -20.74]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "deposit_name": "Pilgangoora",
+        "operator_name": "Pilbara Minerals Ltd",
+        "commodities": "Lithium, Tantalum",
+        "state": "WA",
+        "operating_status": "Operating Mine"
+      },
+      "geometry": {"type": "Point", "coordinates": [118.98, -21.07]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "deposit_name": "Wombat Creek",
+        "operator_name": "Unknown Exploration Pty Ltd",
+        "commodities": "Gold",
+        "state": "NSW",
+        "operating_status": "Exploration"
+      },
+      "geometry": {"type": "Point", "coordinates": [149.5, -33.2]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "deposit_name": "Ghost Range",
+        "operator_name": "Boss Energy Limited",
+        "commodities": "Uranium",
+        "state": "SA",
+        "operating_status": "Feasibility"
+      },
+      "geometry": {"type": "Point", "coordinates": [139.5, -31.2]}
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "deposit_name": "Hemi",
+        "operator_name": "De Grey Mining Limited",
+        "commodities": "Gold",
+        "state": "WA",
+        "operating_status": "Resource Definition"
+      },
+      "geometry": {"type": "Point", "coordinates": [119.73, -20.74]}
+    }
+  ]
+}

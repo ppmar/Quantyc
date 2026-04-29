@@ -1,0 +1,2 @@
+-- Migration 0003: Add source provenance column to projects
+-- Tracks whether row came from 'ozmin', 'minedex', 'jorc_parser', or 'manual'

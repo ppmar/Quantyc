@@ -99,16 +99,16 @@ def detect_profile(pdf_bytes: bytes) -> bool:
 # ── Field extraction helpers ───────────────────────────────────────────
 
 _COMMODITY_MAP = [
-    (re.compile(r"\bgold\b|\bAu\b", re.I), "Au"),
-    (re.compile(r"\bsilver\b|\bAg\b", re.I), "Ag"),
-    (re.compile(r"\bcopper\b|\bCu\b", re.I), "Cu"),
+    (re.compile(r"\bgold\b|(?<!\.)\bAu\b", re.I), "Au"),
+    (re.compile(r"\bsilver\b|(?<!\.)\bAg\b", re.I), "Ag"),
+    (re.compile(r"\bcopper\b|(?<!\.)\bCu\b", re.I), "Cu"),
     (re.compile(r"\blithium\b|\bLi2?O\b|\bLCE\b", re.I), "Li2O"),
     (re.compile(r"\buranium\b|\bU3O8\b", re.I), "U3O8"),
-    (re.compile(r"\bnickel\b|\bNi\b", re.I), "Ni"),
-    (re.compile(r"\bzinc\b|\bZn\b", re.I), "Zn"),
-    (re.compile(r"\biron\s*ore\b|\bFe\b", re.I), "Fe"),
+    (re.compile(r"\bnickel\b|(?<!\.)\bNi\b", re.I), "Ni"),
+    (re.compile(r"\bzinc\b|(?<!\.)\bZn\b", re.I), "Zn"),
+    (re.compile(r"\biron\s*ore\b|(?<!\.)\bFe\b", re.I), "Fe"),
     (re.compile(r"\brare\s*earth\b|\bREE\b|\bTREO\b", re.I), "TREO"),
-    (re.compile(r"\bcobalt\b|\bCo\b", re.I), "Co"),
+    (re.compile(r"\bcobalt\b|(?<!\.)\bCo\b", re.I), "Co"),
     (re.compile(r"\bgraphite\b|\bTGC\b", re.I), "Graphite"),
 ]
 
@@ -320,18 +320,39 @@ def _find_jorc_tables(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]]
                     if len(cats_found) < 2:
                         continue
 
-                    # Find the header row (first row without a category label)
-                    header_idx = 0
+                    # Find the first row containing a JORC category
+                    first_cat_idx = None
                     for i, row in enumerate(table):
                         if row and row[0]:
                             cell = row[0].strip().lower()
                             if any(cat in cell for cat in _JORC_CATEGORIES):
+                                first_cat_idx = i
                                 break
-                        header_idx = i
 
-                    headers = [str(c or "") for c in table[header_idx]]
+                    if first_cat_idx is None:
+                        continue
+
+                    # Scan all rows BEFORE the first category row for column
+                    # header tokens. Real PDFs often have empty rows, merged
+                    # cells, or section sub-headers between the column headers
+                    # and the data rows (e.g. "Open Pit (cut-off grade = ...)").
+                    merged_header = [""] * len(table[0])
+                    for i in range(first_cat_idx):
+                        row = table[i]
+                        if not row:
+                            continue
+                        for j, cell in enumerate(row):
+                            if cell and j < len(merged_header):
+                                existing = merged_header[j].strip()
+                                addition = str(cell).strip()
+                                if addition:
+                                    merged_header[j] = (
+                                        f"{existing} {addition}" if existing else addition
+                                    )
+
+                    headers = merged_header
                     data_rows = []
-                    for row in table[header_idx + 1:]:
+                    for row in table[first_cat_idx:]:
                         cells = [str(c or "") for c in row]
                         data_rows.append(cells)
 
@@ -351,9 +372,11 @@ def _parse_jorc_table(
 
     warnings = []
 
-    # Classify columns
+    # Classify columns (skip col 0 — always the category label)
     col_map: dict[str, int] = {}
     for i, h in enumerate(headers):
+        if i == 0:
+            continue
         ctype = _classify_header(h)
         if ctype and ctype not in col_map:
             col_map[ctype] = i

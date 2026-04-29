@@ -370,12 +370,18 @@ def api_company_snapshot(ticker: str):
                 "type": r["resource_or_reserve"],
             })
 
+        # sqlite3.Row doesn't support .get(); safely read optional columns
+        try:
+            source = proj["source"]
+        except (IndexError, KeyError):
+            source = None
+
         projects_data.append({
             "name": proj["project_name"],
             "stage": proj["stage"],
             "state": proj["state"],
             "country": proj["country"] or "Australia",
-            "source": proj.get("source"),
+            "source": source,
             "commodities": commodity_list,
             "primary_commodity": primary_commodity,
             "resources": resources_out,

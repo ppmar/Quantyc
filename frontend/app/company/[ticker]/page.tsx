@@ -8,9 +8,7 @@ import { HeroGrid } from "@/components/company/HeroGrid";
 import { CashTrajectoryChart } from "@/components/company/CashTrajectoryChart";
 import { ActivityFeed } from "@/components/company/ActivityFeed";
 import { SnapshotSkeleton } from "@/components/company/Skeleton";
-import { FinancialsTab } from "./FinancialsTab";
-import { CapitalTab } from "./CapitalTab";
-import { DocumentsTab } from "./DocumentsTab";
+import { OperationsTab } from "./OperationsTab";
 
 export default function CompanyPage({
   params,
@@ -98,16 +96,8 @@ export default function CompanyPage({
         </div>
       )}
 
-      {activeTab === "financials" && (
-        <FinancialsTab ticker={data.ticker} />
-      )}
-
-      {activeTab === "capital" && (
-        <CapitalTab ticker={data.ticker} />
-      )}
-
-      {activeTab === "documents" && (
-        <DocumentsTab ticker={data.ticker} />
+      {activeTab === "operations" && (
+        <OperationsTab projects={data.projects ?? []} />
       )}
     </div>
   );

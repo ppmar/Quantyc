@@ -125,6 +125,15 @@ def _run_ingest(tickers, count):
         pipeline_status["phase"] = "polling"
         poll_tickers(tickers, count=count, status=pipeline_status)
 
+        # Bootstrap projects from government data (OZMIN) for any new companies
+        pipeline_status["phase"] = "bootstrapping_projects"
+        try:
+            from ingest.ozmin_loader import load_ozmin
+            ozmin_stats = load_ozmin()
+            logger.info("OZMIN bootstrap: %s", ozmin_stats)
+        except Exception:
+            logger.warning("OZMIN bootstrap failed (non-fatal):\n%s", traceback.format_exc())
+
         failed = pipeline_status.get("failed_count", 0)
         pipeline_status["phase"] = "done_with_errors" if failed > 0 else "done"
         pipeline_status["running"] = False

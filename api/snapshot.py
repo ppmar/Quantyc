@@ -324,6 +324,76 @@ def api_company_snapshot(ticker: str):
             "source_url": source_url,
         })
 
+    # ── Projects & resources ───────────────────────────────────────────
+    projects_data = []
+    company_id = company["company_id"]
+    projects = conn.execute(
+        "SELECT * FROM projects WHERE company_id = ? ORDER BY created_at DESC",
+        (company_id,),
+    ).fetchall()
+
+    for proj in projects:
+        pid = proj["project_id"]
+
+        # Commodities
+        commodities = conn.execute(
+            "SELECT commodity, is_primary FROM project_commodities WHERE project_id = ? ORDER BY is_primary DESC",
+            (pid,),
+        ).fetchall()
+        commodity_list = [c["commodity"] for c in commodities]
+        primary_commodity = next((c["commodity"] for c in commodities if c["is_primary"]), None)
+
+        # Latest resource estimate
+        resource_rows = conn.execute(
+            """SELECT category, tonnes, grade, grade_unit, contained_metal, contained_metal_unit,
+                      effective_date, resource_or_reserve
+               FROM resources WHERE project_id = ?
+               ORDER BY effective_date DESC, resource_id DESC""",
+            (pid,),
+        ).fetchall()
+
+        resources_out = []
+        latest_date = None
+        for r in resource_rows:
+            if latest_date is None:
+                latest_date = r["effective_date"]
+            # Only show most recent estimate
+            if r["effective_date"] != latest_date:
+                break
+            resources_out.append({
+                "category": r["category"],
+                "tonnes_mt": r["tonnes"],
+                "grade": r["grade"],
+                "grade_unit": r["grade_unit"],
+                "contained_metal": r["contained_metal"],
+                "contained_metal_unit": r["contained_metal_unit"],
+                "type": r["resource_or_reserve"],
+            })
+
+        projects_data.append({
+            "name": proj["project_name"],
+            "stage": proj["stage"],
+            "state": proj["state"],
+            "country": proj["country"] or "Australia",
+            "source": proj.get("source"),
+            "commodities": commodity_list,
+            "primary_commodity": primary_commodity,
+            "resources": resources_out,
+            "resource_date": _fmt_date_display(latest_date) if latest_date else None,
+        })
+
+    has_projects = len(projects_data) > 0
+
+    # Dynamic meta_line from projects if static CSV is empty
+    if not meta_line and has_projects:
+        p = projects_data[0]
+        meta_parts = [
+            p["primary_commodity"] or "",
+            p["name"],
+            p["state"] or p["country"],
+        ]
+        meta_line = " · ".join(part for part in meta_parts if part)
+
     # ── Tab visibility ───────────────────────────────────────────────────
     has_financials = len(cash_rows) > 0
     has_capital = capital_section is not None
@@ -335,14 +405,14 @@ def api_company_snapshot(ticker: str):
         "summary": True,
         "financials": has_financials,
         "capital": has_capital,
-        "operations": False,
+        "operations": has_projects,
         "documents": doc_count > 0,
         "holders": False,
     }
 
     conn.close()
 
-    has_data = has_financials or has_capital or doc_count > 0
+    has_data = has_financials or has_capital or doc_count > 0 or has_projects
 
     snapshot = {
         "ticker": ticker,
@@ -359,5 +429,7 @@ def api_company_snapshot(ticker: str):
         snapshot["cash"] = cash_section
     if capital_section:
         snapshot["capital"] = capital_section
+    if has_projects:
+        snapshot["projects"] = projects_data
 
     return jsonify(snapshot)

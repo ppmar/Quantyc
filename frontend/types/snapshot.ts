@@ -10,10 +10,33 @@ export type CompanySnapshot = {
   cash_history: CashHistoryPoint[];
   activity: ActivityEvent[];
   tabs: TabVisibility;
+  projects?: ProjectData[];
 
   exploration?: unknown;
   resource?: unknown;
   holders?: unknown;
+};
+
+export type ResourceRow = {
+  category: string;
+  tonnes_mt: number | null;
+  grade: number | null;
+  grade_unit: string | null;
+  contained_metal: number | null;
+  contained_metal_unit: string | null;
+  type: "resource" | "reserve";
+};
+
+export type ProjectData = {
+  name: string;
+  stage: string | null;
+  state: string | null;
+  country: string;
+  source: string | null;
+  commodities: string[];
+  primary_commodity: string | null;
+  resources: ResourceRow[];
+  resource_date: string | null;
 };
 
 export type CashSection = {

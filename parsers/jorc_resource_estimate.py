@@ -50,14 +50,17 @@ def _has_jorc_table(pdf_bytes: bytes) -> bool:
                 for table in tables:
                     if not table:
                         continue
-                    # Check first column of each row for category labels
+                    # Check all columns for category labels
                     cats_found = set()
                     for row in table:
-                        if row and row[0]:
-                            cell = row[0].strip().lower()
-                            for cat in _JORC_CATEGORIES:
-                                if cat in cell:
-                                    cats_found.add(cat)
+                        if not row:
+                            continue
+                        for cell in row:
+                            if cell:
+                                cell_lower = cell.strip().lower()
+                                for cat in _JORC_CATEGORIES:
+                                    if cat in cell_lower:
+                                        cats_found.add(cat)
                     if len(cats_found) >= 2:
                         return True
     except Exception:
@@ -241,6 +244,8 @@ def _classify_header(header: str) -> Optional[str]:
     for token in _TONNES_HEADERS:
         if token in h:
             return "tonnes"
+    if "cut-off" in h or "cutoff" in h or "cut off" in h:
+        return None  # cut-off grade is not the resource grade column
     for token in _GRADE_HEADERS:
         if token in h:
             return "grade"
@@ -297,34 +302,47 @@ def _normalize_tonnes(val: Optional[Decimal], source_unit: str) -> Optional[Deci
     return val  # already Mt
 
 
-def _find_jorc_tables(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]]]]:
-    """Find JORC summary tables. Returns list of (headers, data_rows)."""
+def _find_category_column(table: list[list[str]]) -> tuple[int | None, set[str]]:
+    """Find which column holds JORC category labels. Returns (col_idx, categories_found)."""
+    ncols = max((len(r) for r in table if r), default=0)
+    best_col = None
+    best_cats: set[str] = set()
+    for col_idx in range(ncols):
+        cats = set()
+        for row in table:
+            if row and col_idx < len(row) and row[col_idx]:
+                cell = row[col_idx].strip().lower()
+                for cat in _JORC_CATEGORIES:
+                    if cat in cell:
+                        cats.add(cat)
+        if len(cats) > len(best_cats):
+            best_cats = cats
+            best_col = col_idx
+    return best_col, best_cats
+
+
+def _find_jorc_tables(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]], int]]:
+    """Find JORC summary tables. Returns list of (headers, data_rows, category_col_idx)."""
     results = []
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
+            for page in pdf.pages[:25]:
                 tables = page.extract_tables()
                 for table in tables:
                     if not table or len(table) < 3:
                         continue
 
-                    # Check if this table has JORC categories in first column
-                    cats_found = set()
-                    for row in table:
-                        if row and row[0]:
-                            cell = row[0].strip().lower()
-                            for cat in _JORC_CATEGORIES:
-                                if cat in cell:
-                                    cats_found.add(cat)
+                    # Find which column holds JORC categories
+                    cat_col, cats_found = _find_category_column(table)
 
-                    if len(cats_found) < 2:
+                    if cat_col is None or len(cats_found) < 2:
                         continue
 
-                    # Find the first row containing a JORC category
+                    # Find the first row containing a JORC category in the detected column
                     first_cat_idx = None
                     for i, row in enumerate(table):
-                        if row and row[0]:
-                            cell = row[0].strip().lower()
+                        if row and cat_col < len(row) and row[cat_col]:
+                            cell = row[cat_col].strip().lower()
                             if any(cat in cell for cat in _JORC_CATEGORIES):
                                 first_cat_idx = i
                                 break
@@ -356,7 +374,26 @@ def _find_jorc_tables(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]]
                         cells = [str(c or "") for c in row]
                         data_rows.append(cells)
 
-                    results.append((headers, data_rows))
+                    # Compact: remove columns that are empty in both headers and all data rows.
+                    # pdfplumber often splits merged cells into multiple empty columns.
+                    ncols = len(headers)
+                    keep = []
+                    for ci in range(ncols):
+                        if headers[ci].strip():
+                            keep.append(ci)
+                            continue
+                        if any(dr[ci].strip() for dr in data_rows if ci < len(dr)):
+                            keep.append(ci)
+                    if keep:
+                        headers = [headers[ci] for ci in keep]
+                        data_rows = [
+                            [row[ci] if ci < len(row) else "" for ci in keep]
+                            for row in data_rows
+                        ]
+                        # Re-map cat_col after compaction
+                        cat_col = keep.index(cat_col) if cat_col in keep else 0
+
+                    results.append((headers, data_rows, cat_col))
     except Exception:
         pass
     return results
@@ -366,16 +403,17 @@ def _parse_jorc_table(
     headers: list[str],
     data_rows: list[list[str]],
     grade_unit_override: Optional[str] = None,
+    category_col: int = 0,
 ) -> tuple[list, list[str]]:
     """Parse a single JORC table into JORCRow list + warnings."""
     from .jorc_resource_estimate_schemas import JORCRow
 
     warnings = []
 
-    # Classify columns (skip col 0 — always the category label)
+    # Classify columns (skip the category column)
     col_map: dict[str, int] = {}
     for i, h in enumerate(headers):
-        if i == 0:
+        if i == category_col:
             continue
         ctype = _classify_header(h)
         if ctype and ctype not in col_map:
@@ -392,12 +430,22 @@ def _parse_jorc_table(
     if tonnes_source != "Mt":
         warnings.append(f"tonnes_converted_from_{tonnes_source}")
 
+    def _fuzzy_read(row: list[str], col: int) -> float | None:
+        """Read a numeric value from col, falling back to adjacent columns (±1).
+        pdfplumber merged-cell tables often offset data by one column."""
+        for c in (col, col - 1, col + 1):
+            if 0 <= c < len(row):
+                val = _parse_decimal(row[c])
+                if val is not None:
+                    return val
+        return None
+
     rows = []
     for row_cells in data_rows:
-        if not row_cells or not row_cells[0]:
+        if not row_cells or category_col >= len(row_cells) or not row_cells[category_col]:
             continue
 
-        label = row_cells[0].strip().lower()
+        label = row_cells[category_col].strip().lower()
 
         # Match category
         category = None
@@ -411,12 +459,12 @@ def _parse_jorc_table(
 
         raw_line = " | ".join(c.strip() for c in row_cells if c.strip())
 
-        tonnes_raw = _parse_decimal(row_cells[col_map["tonnes"]]) if "tonnes" in col_map and col_map["tonnes"] < len(row_cells) else None
+        tonnes_raw = _fuzzy_read(row_cells, col_map["tonnes"]) if "tonnes" in col_map else None
         tonnes_mt = _normalize_tonnes(tonnes_raw, tonnes_source)
 
-        grade_val = _parse_decimal(row_cells[col_map["grade"]]) if "grade" in col_map and col_map["grade"] < len(row_cells) else None
+        grade_val = _fuzzy_read(row_cells, col_map["grade"]) if "grade" in col_map else None
 
-        contained_val = _parse_decimal(row_cells[col_map["contained"]]) if "contained" in col_map and col_map["contained"] < len(row_cells) else None
+        contained_val = _fuzzy_read(row_cells, col_map["contained"]) if "contained" in col_map else None
 
         rows.append(JORCRow(
             category=category,
@@ -555,8 +603,8 @@ def parse(
     all_rows: list = []
     resource_or_reserve = "resource"
 
-    for headers, data_rows in tables:
-        rows, table_warnings = _parse_jorc_table(headers, data_rows)
+    for headers, data_rows, cat_col in tables:
+        rows, table_warnings = _parse_jorc_table(headers, data_rows, category_col=cat_col)
         warnings.extend(table_warnings)
 
         # Check for reserve rows

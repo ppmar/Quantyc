@@ -194,6 +194,7 @@ def poll_ticker(ticker: str, count: int = 100, status: dict | None = None) -> di
         # Step 6: extract (direct 5B or scan quarterly report for embedded 5B)
         _classify_and_extract(doc_id, doc_type, pdf_bytes)
         del pdf_bytes
+        import gc; gc.collect()
 
         stats["new"] += 1
         if status:
@@ -285,6 +286,10 @@ def _extract_resource_update(doc_id: int, pdf_bytes: bytes) -> None:
     except (ExtractionError, MalformedDocumentError) as e:
         logger.warning("Doc %d: JORC parser failed: %s", doc_id, e)
         _mark_status(doc_id, "failed", f"jorc_parse_error:{e}")
+        return
+    except Exception as e:
+        logger.warning("Doc %d: JORC parser unexpected error: %s", doc_id, e)
+        _mark_status(doc_id, "failed", f"jorc_unexpected:{e}")
         return
 
     # Persist: bootstrap project + insert resource rows

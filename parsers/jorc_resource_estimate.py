@@ -45,7 +45,7 @@ def _has_jorc_table(pdf_bytes: bytes) -> bool:
     """Check if any extracted table contains JORC category labels."""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
+            for page in pdf.pages[:20]:
                 tables = page.extract_tables()
                 for table in tables:
                     if not table:

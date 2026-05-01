@@ -766,6 +766,17 @@ def parse(
 
         all_rows.extend(resource_rows)
 
+    # When aggregating multiple tables, drop intermediate Total/sub-total rows
+    # and recompute a single Total from category rows
+    _INDIVIDUAL_CATS = {"Measured", "Indicated", "Inferred", "Measured+Indicated", "Indicated+Inferred"}
+    category_rows = [r for r in all_rows if r.category in _INDIVIDUAL_CATS]
+
+    if len(tables) > 1 and category_rows:
+        # Multiple tables → totals are per-section, not meaningful aggregated
+        # Keep only individual category rows; downstream can sum if needed
+        all_rows = category_rows
+        warnings.append("intermediate_totals_dropped")
+
     if not all_rows:
         raise MalformedDocumentError("no_category_rows_extracted")
 

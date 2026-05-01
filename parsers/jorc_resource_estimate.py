@@ -42,15 +42,15 @@ _JORC_CATEGORIES = {"measured", "indicated", "inferred", "proven", "proved", "pr
 
 
 def _has_jorc_table(pdf_bytes: bytes) -> bool:
-    """Check if any extracted table contains JORC category labels."""
+    """Check if any extracted table OR text contains JORC category labels."""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages[:20]:
+                # Check grid-based tables
                 tables = page.extract_tables()
                 for table in tables:
                     if not table:
                         continue
-                    # Check all columns for category labels
                     cats_found = set()
                     for row in table:
                         if not row:
@@ -62,6 +62,17 @@ def _has_jorc_table(pdf_bytes: bytes) -> bool:
                                     if cat in cell_lower:
                                         cats_found.add(cat)
                     if len(cats_found) >= 2:
+                        return True
+
+                # Fallback: check raw text for category labels (no grid lines)
+                text = (page.extract_text() or "").lower()
+                text_cats = set()
+                for cat in _JORC_CATEGORIES:
+                    if cat in text:
+                        text_cats.add(cat)
+                if len(text_cats) >= 2:
+                    # Also need at least one number nearby to avoid matching prose
+                    if re.search(r"\b\d+[,.]?\d*\s*(?:mt|kt|t|g/t|%|ppm|moz|koz)\b", text, re.I):
                         return True
     except Exception:
         return False
@@ -226,29 +237,80 @@ _CATEGORY_MAP = {
     "proven": "Proven",
     "proved": "Proven",
     "probable": "Probable",
+    # Combined / roll-up rows → Total
     "total": "Total",
-    "measured + indicated": "Total",
-    "measured+indicated": "Total",
-    "m+i": "Total",
+    "sub-total": "Total",
+    "sub total": "Total",
+    "subtotal": "Total",
+    "grand total": "Total",
+    "total resource": "Total",
+    "total reserve": "Total",
+    "total mineral resource": "Total",
+    "total ore reserve": "Total",
+    "in-situ total": "Total",
+    "global": "Total",
+    "combined": "Total",
+    # Measured + Indicated combined rows
+    "measured + indicated": "Measured+Indicated",
+    "measured+indicated": "Measured+Indicated",
+    "measured and indicated": "Measured+Indicated",
+    "measured & indicated": "Measured+Indicated",
+    "m+i": "Measured+Indicated",
+    "m & i": "Measured+Indicated",
+    "m&i": "Measured+Indicated",
+    # Indicated + Inferred combined
+    "indicated + inferred": "Indicated+Inferred",
+    "indicated+inferred": "Indicated+Inferred",
+    "indicated and inferred": "Indicated+Inferred",
+    # Reserve combined
+    "proven + probable": "Proven+Probable",
+    "proven+probable": "Proven+Probable",
+    "proved + probable": "Proven+Probable",
+    "proved+probable": "Proven+Probable",
+    "proven and probable": "Proven+Probable",
+    "proved and probable": "Proven+Probable",
+    "p+p": "Proven+Probable",
+    "2p": "Proven+Probable",
 }
 
 # Column header tokens
-_TONNES_HEADERS = {"tonnes", "mt", "kt", "tonnage", "million tonnes"}
+_TONNES_HEADERS = {"tonnes", "mt", "kt", "tonnage", "million tonnes", "million\ntonnes", "tons"}
 _GRADE_HEADERS = {"g/t", "%", "ppm", "lb/t", "grade"}
-_CONTAINED_HEADERS = {"contained", "moz", "koz", "kt", "mlb", "metal", "ounces", "oz"}
+_CONTAINED_HEADERS = {"contained", "moz", "koz", "mlb", "metal", "ounces", "oz"}
+# Tokens that indicate the category/classification column (skip for numeric classification)
+_CATEGORY_HEADERS = {"category", "classification", "class", "resource category", "reserve category",
+                     "deposit", "type", "area"}
+
+
+def _normalize_header(header: str) -> str:
+    """Normalize a column header for matching: lowercase, collapse whitespace/linebreaks, strip subscript artifacts."""
+    h = header.strip().lower()
+    # pdfplumber subscript artifacts: "Li O %\n2" → "li o % 2" → "li2o %"
+    h = re.sub(r"\s+", " ", h)
+    return h
 
 
 def _classify_header(header: str) -> Optional[str]:
-    """Classify a column header as 'tonnes', 'grade', or 'contained'."""
-    h = header.strip().lower()
+    """Classify a column header as 'category', 'tonnes', 'grade', or 'contained'."""
+    h = _normalize_header(header)
+    if not h:
+        return None
+    # Category column
+    for token in _CATEGORY_HEADERS:
+        if token in h:
+            return "category"
+    # Tonnes
     for token in _TONNES_HEADERS:
         if token in h:
             return "tonnes"
+    # Reject cut-off grade before grade match
     if "cut-off" in h or "cutoff" in h or "cut off" in h:
-        return None  # cut-off grade is not the resource grade column
+        return None
+    # Grade
     for token in _GRADE_HEADERS:
         if token in h:
             return "grade"
+    # Contained metal
     for token in _CONTAINED_HEADERS:
         if token in h:
             return "contained"
@@ -258,7 +320,7 @@ def _classify_header(header: str) -> Optional[str]:
 def _detect_grade_unit(headers: list[str]) -> str:
     """Infer grade unit from column headers."""
     for h in headers:
-        hl = h.strip().lower()
+        hl = _normalize_header(h)
         if "g/t" in hl:
             return "g/t"
         if "%" in hl:
@@ -273,7 +335,7 @@ def _detect_grade_unit(headers: list[str]) -> str:
 def _detect_contained_unit(headers: list[str]) -> Optional[str]:
     """Infer contained metal unit from column headers."""
     for h in headers:
-        hl = h.strip().lower()
+        hl = _normalize_header(h)
         for unit in ["moz", "koz", "mlb", "kt", "oz"]:
             if unit in hl:
                 return unit.capitalize() if unit[0] != "g" else unit
@@ -283,8 +345,8 @@ def _detect_contained_unit(headers: list[str]) -> Optional[str]:
 def _detect_tonnes_source_unit(headers: list[str]) -> str:
     """Detect whether tonnes are in Mt, kt, or t."""
     for h in headers:
-        hl = h.strip().lower()
-        if "kt" in hl:
+        hl = _normalize_header(h)
+        if "kt" in hl and "million" not in hl:
             return "kt"
         if "mt" in hl or "million" in hl:
             return "Mt"
@@ -399,6 +461,82 @@ def _find_jorc_tables(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]]
     return results
 
 
+# ── Text-based table fallback ─────────────────────────────────────────
+
+_TEXT_CATEGORY_RE = re.compile(
+    r"^\s*(Measured|Indicated|Inferred|Proven|Proved|Probable|Total|Sub[\-\s]?total|"
+    r"Measured\s*[+&]\s*Indicated|Indicated\s*[+&]\s*Inferred|"
+    r"Proven\s*[+&]\s*Probable|Proved\s*[+&]\s*Probable)\b",
+    re.I,
+)
+
+_TEXT_NUMBER_RE = re.compile(r"[\d,]+\.?\d*")
+
+
+def _find_jorc_tables_from_text(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]], int]]:
+    """Fallback: extract JORC tables from aligned text when pdfplumber finds no grid tables.
+
+    Scans each page's raw text for lines starting with a JORC category label,
+    then splits the remaining part of each line on whitespace to get numeric columns.
+    """
+    results = []
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages[:25]:
+                text = page.extract_text() or ""
+                lines = text.split("\n")
+
+                # Collect lines that start with a JORC category
+                cat_lines: list[tuple[str, list[str]]] = []
+                for line in lines:
+                    m = _TEXT_CATEGORY_RE.match(line)
+                    if m:
+                        cat_label = m.group(1).strip()
+                        rest = line[m.end():]
+                        numbers = _TEXT_NUMBER_RE.findall(rest)
+                        if numbers:
+                            cat_lines.append((cat_label, numbers))
+
+                if len(cat_lines) < 2:
+                    continue
+
+                # Determine number of numeric columns from the most common count
+                col_counts = [len(nums) for _, nums in cat_lines]
+                ncols = max(set(col_counts), key=col_counts.count)
+
+                # Try to find a header line above the first category line
+                first_cat_line_idx = None
+                for i, line in enumerate(lines):
+                    if _TEXT_CATEGORY_RE.match(line):
+                        first_cat_line_idx = i
+                        break
+
+                headers = ["Category"] + [f"Col{j+1}" for j in range(ncols)]
+                if first_cat_line_idx is not None and first_cat_line_idx > 0:
+                    # Look at the line(s) just above for header tokens
+                    for scan_idx in range(max(0, first_cat_line_idx - 3), first_cat_line_idx):
+                        hline = lines[scan_idx]
+                        # Split on 2+ spaces (tabular alignment)
+                        parts = re.split(r"\s{2,}", hline.strip())
+                        if len(parts) >= 2:
+                            headers = ["Category"] + parts[-ncols:] if len(parts) > ncols else ["Category"] + parts
+                            break
+
+                # Build data rows
+                data_rows = []
+                for cat_label, numbers in cat_lines:
+                    row = [cat_label] + numbers[:ncols]
+                    # Pad if needed
+                    while len(row) < len(headers):
+                        row.append("")
+                    data_rows.append(row)
+
+                results.append((headers, data_rows, 0))
+    except Exception:
+        pass
+    return results
+
+
 def _parse_jorc_table(
     headers: list[str],
     data_rows: list[list[str]],
@@ -447,9 +585,9 @@ def _parse_jorc_table(
 
         label = row_cells[category_col].strip().lower()
 
-        # Match category
+        # Match category (try longer keys first so "measured + indicated" beats "measured")
         category = None
-        for key, cat in _CATEGORY_MAP.items():
+        for key, cat in sorted(_CATEGORY_MAP.items(), key=lambda x: -len(x[0])):
             if key in label:
                 category = cat
                 break
@@ -573,10 +711,11 @@ def parse(
     except Exception as e:
         raise ExtractionError(f"pdf_read_error:{type(e).__name__}")
 
-    # Project name
+    # Project name (best-effort — don't fail if missing)
     project_name = _extract_project_name(all_text)
     if not project_name:
-        raise MalformedDocumentError("project_name_not_found")
+        warnings.append("project_name_not_found")
+        project_name = "Unknown"
 
     # Commodity
     commodity, commodity_warnings = _infer_commodity(all_text)
@@ -594,12 +733,16 @@ def parse(
         warnings.append("effective_date_fallback_to_announcement")
         effective_date = announcement_date
 
-    # Find and parse JORC tables
+    # Find and parse JORC tables (grid-based first, text fallback second)
     tables = _find_jorc_tables(pdf_bytes)
+    if not tables:
+        tables = _find_jorc_tables_from_text(pdf_bytes)
+        if tables:
+            warnings.append("table_from_text_fallback")
     if not tables:
         raise MalformedDocumentError("no_jorc_table_found")
 
-    # Parse the first (primary) table
+    # Parse ALL tables and aggregate (real PDFs split by pit/UG/oxide/fresh)
     all_rows: list = []
     resource_or_reserve = "resource"
 
@@ -608,23 +751,20 @@ def parse(
         warnings.extend(table_warnings)
 
         # Check for reserve rows
-        for row in rows:
-            if row.category in ("Proven", "Probable"):
-                if not any(r.category in ("Measured", "Indicated", "Inferred") for r in rows):
-                    resource_or_reserve = "reserve"
-                else:
-                    warnings.append("mixed_resource_reserve_table")
-                break
+        has_reserve = any(r.category in ("Proven", "Probable", "Proven+Probable") for r in rows)
+        has_resource = any(r.category in ("Measured", "Indicated", "Inferred", "Measured+Indicated", "Indicated+Inferred") for r in rows)
+
+        if has_reserve and not has_resource:
+            resource_or_reserve = "reserve"
+        elif has_reserve and has_resource:
+            warnings.append("mixed_resource_reserve_table")
 
         # Keep only resource rows (spec: reserve parsing is future)
-        resource_rows = [r for r in rows if r.category not in ("Proven", "Probable")]
-        if any(r.category in ("Proven", "Probable") for r in rows):
+        resource_rows = [r for r in rows if r.category not in ("Proven", "Probable", "Proven+Probable")]
+        if has_reserve:
             warnings.append("reserve_rows_present_but_ignored")
 
         all_rows.extend(resource_rows)
-
-        if all_rows:
-            break  # use first table with results
 
     if not all_rows:
         raise MalformedDocumentError("no_category_rows_extracted")

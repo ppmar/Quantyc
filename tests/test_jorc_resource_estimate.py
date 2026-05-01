@@ -305,3 +305,141 @@ class TestPolymetallic:
         # Should pick a commodity (Cu or Au) and warn about polymetallic
         assert result.commodity in ("Cu", "Au")
         assert any("polymetallic" in w.lower() for w in result.extraction_warnings)
+
+
+# ── Test 13: Missing project name warns instead of raising ──────────
+
+class TestMissingProjectName:
+    def test_missing_project_name_warns(self):
+        # Title with no recognizable project name pattern
+        title = (
+            "JORC Code (2012) Compliant\n"
+            "latest drilling results summary"
+        )
+        table = [
+            ["Category", "Tonnes (Mt)", "Grade (g/t)", "Contained (koz)"],
+            ["Indicated", "5.0", "1.8", "289"],
+            ["Inferred", "3.0", "1.5", "145"],
+        ]
+        pdf = _make_jorc_pdf(title, table)
+        result = parse(pdf, ticker="TST", doc_id="noname", announcement_date=date(2026, 1, 1))
+        assert result.project_name == "Unknown"
+        assert any("project_name_not_found" in w for w in result.extraction_warnings)
+
+
+# ── Test 14: Sub-total rows map to Total ────────────────────────────
+
+class TestSubTotal:
+    def test_subtotal_maps_to_total(self):
+        table = [
+            ["Category", "Tonnes (Mt)", "Grade (g/t)", "Contained (koz)"],
+            ["Measured", "2.0", "3.1", "200"],
+            ["Indicated", "5.0", "2.5", "402"],
+            ["Sub-total", "7.0", "2.7", "602"],
+            ["Inferred", "3.0", "1.8", "174"],
+            ["Grand Total", "10.0", "2.4", "776"],
+        ]
+        pdf = _make_jorc_pdf(GOLD_TITLE, table, GOLD_EXTRA)
+        result = parse(pdf, ticker="TST", doc_id="sub", announcement_date=date(2026, 1, 1))
+        cats = [r.category for r in result.rows]
+        assert "Measured" in cats
+        assert "Indicated" in cats
+        assert "Inferred" in cats
+        # Sub-total and Grand Total both map to Total
+        total_rows = [r for r in result.rows if r.category == "Total"]
+        assert len(total_rows) >= 1
+
+
+# ── Test 15: Measured+Indicated combined rows ───────────────────────
+
+class TestCombinedCategories:
+    def test_measured_indicated_combined(self):
+        table = [
+            ["Category", "Tonnes (Mt)", "Grade (g/t)", "Contained (koz)"],
+            ["Measured", "2.0", "3.1", "200"],
+            ["Indicated", "5.0", "2.5", "402"],
+            ["Measured + Indicated", "7.0", "2.7", "602"],
+            ["Inferred", "3.0", "1.8", "174"],
+            ["Total", "10.0", "2.4", "776"],
+        ]
+        pdf = _make_jorc_pdf(GOLD_TITLE, table, GOLD_EXTRA)
+        result = parse(pdf, ticker="TST", doc_id="mi", announcement_date=date(2026, 1, 1))
+        cats = [r.category for r in result.rows]
+        assert "Measured+Indicated" in cats
+
+
+# ── Test 16: Multi-table aggregation (Open Pit + Underground) ──────
+
+class TestMultiTableAggregation:
+    def test_aggregates_across_two_tables(self):
+        table1 = [
+            ["Category", "Tonnes (Mt)", "Grade (g/t)", "Contained (koz)"],
+            ["Measured", "2.0", "2.1", "135"],
+            ["Indicated", "4.0", "1.8", "231"],
+        ]
+        table2 = [
+            ["Category", "Tonnes (Mt)", "Grade (g/t)", "Contained (koz)"],
+            ["Indicated", "8.0", "1.5", "386"],
+            ["Inferred", "6.0", "1.2", "231"],
+        ]
+        # Build a PDF with two separate JORC tables
+        buf = io.BytesIO()
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.pdfgen import canvas as rc
+        from reportlab.platypus import Table, TableStyle
+
+        c = rc.Canvas(buf, pagesize=A4)
+        y = 750
+        for line in GOLD_TITLE.split("\n"):
+            c.drawString(72, y, line)
+            y -= 14
+        for line in GOLD_EXTRA.split("\n"):
+            c.drawString(72, y, line)
+            y -= 14
+
+        # Table 1: Open Pit
+        y -= 10
+        c.drawString(72, y, "Open Pit")
+        y -= 20
+        tbl1 = Table(table1)
+        tbl1.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black)]))
+        w, h = tbl1.wrapOn(c, 450, 300)
+        tbl1.drawOn(c, 72, y - h)
+        y -= h + 20
+
+        # Table 2: Underground
+        c.drawString(72, y, "Underground")
+        y -= 20
+        tbl2 = Table(table2)
+        tbl2.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black)]))
+        w, h = tbl2.wrapOn(c, 450, 300)
+        tbl2.drawOn(c, 72, y - h)
+
+        c.showPage()
+        c.save()
+        pdf = buf.getvalue()
+
+        result = parse(pdf, ticker="TST", doc_id="multi", announcement_date=date(2026, 1, 1))
+        # Should have rows from both tables
+        cats = [r.category for r in result.rows]
+        assert cats.count("Indicated") == 2  # one from each table
+        assert "Measured" in cats
+        assert "Inferred" in cats
+        assert len(result.rows) >= 4
+
+
+# ── Test 17: "Classification" header recognized as category column ──
+
+class TestClassificationHeader:
+    def test_classification_header(self):
+        table = [
+            ["Classification", "Million tonnes", "Grade (g/t)", "Contained (koz)"],
+            ["Measured", "3.0", "2.5", "241"],
+            ["Indicated", "7.0", "1.9", "428"],
+            ["Inferred", "4.0", "1.4", "180"],
+        ]
+        pdf = _make_jorc_pdf(GOLD_TITLE, table, GOLD_EXTRA)
+        result = parse(pdf, ticker="TST", doc_id="clf", announcement_date=date(2026, 1, 1))
+        meas = next(r for r in result.rows if r.category == "Measured")
+        assert meas.tonnes_mt == Decimal("3.0")

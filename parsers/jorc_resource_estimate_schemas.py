@@ -4,9 +4,11 @@ from decimal import Decimal
 from typing import Optional, Literal
 
 JORCCategory = Literal[
-    "Measured", "Indicated", "Inferred",      # resources
-    "Proven", "Probable",                      # reserves
-    "Total",                                   # roll-up row
+    "Measured", "Indicated", "Inferred",                    # resources
+    "Proven", "Probable",                                   # reserves
+    "Measured+Indicated", "Indicated+Inferred",             # combined resource rows
+    "Proven+Probable",                                      # combined reserve rows
+    "Total",                                                # roll-up row
 ]
 
 ResourceOrReserve = Literal["resource", "reserve"]

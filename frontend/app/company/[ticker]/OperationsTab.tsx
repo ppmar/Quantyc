@@ -39,57 +39,44 @@ function stageBadge(stage: string | null) {
   );
 }
 
-function groupBySection(rows: ResourceRow[]): { section: string; rows: ResourceRow[] }[] {
-  const groups: { section: string; rows: ResourceRow[] }[] = [];
-  const seen = new Map<string, ResourceRow[]>();
-  for (const r of rows) {
-    const key = r.section ?? "_unsectioned";
-    if (!seen.has(key)) {
-      const arr: ResourceRow[] = [];
-      seen.set(key, arr);
-      groups.push({ section: r.section ?? "", rows: arr });
-    }
-    seen.get(key)!.push(r);
-  }
-  return groups;
-}
+const TOTAL_CATS = new Set(["Total", "Sub-total", "In-situ Total", "Stockpiles"]);
 
 function ResourceTable({ resources, resourceDate }: { resources: ResourceRow[]; resourceDate: string | null }) {
   if (resources.length === 0) return null;
 
-  const resourceRows = resources.filter((r) => r.type === "resource");
-  const reserveRows = resources.filter((r) => r.type === "reserve");
+  // Render rows in order, inserting section headers when section changes
+  let lastSection: string | null | undefined = undefined;
+  const tableRows: React.ReactNode[] = [];
 
-  const hasSections = resourceRows.some((r) => r.section);
-  const resourceGroups = hasSections ? groupBySection(resourceRows) : [{ section: "", rows: resourceRows }];
-  const reserveGroups = reserveRows.length > 0
-    ? (reserveRows.some((r) => r.section) ? groupBySection(reserveRows) : [{ section: "", rows: reserveRows }])
-    : [];
+  for (let i = 0; i < resources.length; i++) {
+    const r = resources[i];
+    const isTotal = TOTAL_CATS.has(r.category);
 
-  const renderRows = (rows: ResourceRow[], keyPrefix: string) =>
-    rows.map((r, i) => (
-      <tr key={`${keyPrefix}-${i}`} className="hover:bg-white/[0.02]">
-        <td className="px-3 py-1.5 text-xs text-zinc-400">{r.category}</td>
-        <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtTonnes(r.tonnes_mt)}</td>
-        <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtGrade(r.grade, r.grade_unit)}</td>
-        <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtContained(r.contained_metal, r.contained_metal_unit)}</td>
+    // Section header when section changes (only for sectioned rows)
+    if (r.section && r.section !== lastSection) {
+      tableRows.push(
+        <tr key={`section-${i}`}>
+          <td colSpan={4} className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium border-t border-white/[0.04]">
+            {r.section}
+          </td>
+        </tr>
+      );
+    }
+    lastSection = r.section;
+
+    const isBold = isTotal;
+    const textCls = isBold ? "text-zinc-200 font-medium" : "text-zinc-400";
+    const valCls = isBold ? "text-zinc-200 font-medium" : "text-zinc-300";
+
+    tableRows.push(
+      <tr key={`row-${i}`} className={`hover:bg-white/[0.02] ${isTotal && !r.section ? "border-t border-white/[0.08]" : ""}`}>
+        <td className={`px-3 py-1.5 text-xs ${textCls} ${r.section ? "pl-5" : ""}`}>{r.category}</td>
+        <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtTonnes(r.tonnes_mt)}</td>
+        <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtGrade(r.grade, r.grade_unit)}</td>
+        <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtContained(r.contained_metal, r.contained_metal_unit)}</td>
       </tr>
-    ));
-
-  const renderGrouped = (groups: { section: string; rows: ResourceRow[] }[], typeLabel: string) => (
-    <>
-      {groups.map((g, gi) => (
-        <React.Fragment key={`${typeLabel}-${gi}`}>
-          <tr>
-            <td colSpan={4} className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium">
-              {g.section ? `${typeLabel} — ${g.section}` : typeLabel}
-            </td>
-          </tr>
-          {renderRows(g.rows, `${typeLabel}-${gi}`)}
-        </React.Fragment>
-      ))}
-    </>
-  );
+    );
+  }
 
   return (
     <div className="mt-3">
@@ -103,9 +90,8 @@ function ResourceTable({ resources, resourceDate }: { resources: ResourceRow[]; 
               <th className="px-3 py-2 font-medium text-xs uppercase tracking-wider text-right">Contained</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/[0.04]">
-            {renderGrouped(resourceGroups, "Mineral Resources")}
-            {renderGrouped(reserveGroups, "Ore Reserves")}
+          <tbody>
+            {tableRows}
           </tbody>
         </table>
       </div>

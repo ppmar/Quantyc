@@ -237,17 +237,23 @@ _CATEGORY_MAP = {
     "proven": "Proven",
     "proved": "Proven",
     "probable": "Probable",
-    # Combined / roll-up rows → Total
+    # Sub-totals (per-section roll-ups)
+    "sub-total": "Sub-total",
+    "sub total": "Sub-total",
+    "subtotal": "Sub-total",
+    # In-situ / grand totals
+    "in-situ total": "In-situ Total",
+    "in situ total": "In-situ Total",
+    # Stockpiles
+    "stockpile": "Stockpiles",
+    "stockpiles": "Stockpiles",
+    # Grand total
     "total": "Total",
-    "sub-total": "Total",
-    "sub total": "Total",
-    "subtotal": "Total",
     "grand total": "Total",
     "total resource": "Total",
     "total reserve": "Total",
     "total mineral resource": "Total",
     "total ore reserve": "Total",
-    "in-situ total": "Total",
     "global": "Total",
     "combined": "Total",
     # Measured + Indicated combined rows
@@ -621,6 +627,10 @@ def _parse_jorc_table(
         if category is None:
             continue
 
+        # Whole-deposit rows (In-situ Total, Stockpiles, Total) belong to no section
+        _WHOLE_DEPOSIT_CATS = {"In-situ Total", "Stockpiles", "Total"}
+        row_section = None if category in _WHOLE_DEPOSIT_CATS else current_section
+
         raw_line = " | ".join(c.strip() for c in row_cells if c.strip())
 
         tonnes_raw = _fuzzy_read(row_cells, col_map["tonnes"]) if "tonnes" in col_map else None
@@ -637,7 +647,7 @@ def _parse_jorc_table(
             grade_unit=grade_unit,
             contained_metal=contained_val,
             contained_metal_unit=contained_unit,
-            section=current_section,
+            section=row_section,
             raw_line=raw_line,
         ))
 
@@ -777,32 +787,23 @@ def parse(
         rows, table_warnings = _parse_jorc_table(headers, data_rows, category_col=cat_col)
         warnings.extend(table_warnings)
 
-        # Check for reserve rows
-        has_reserve = any(r.category in ("Proven", "Probable", "Proven+Probable") for r in rows)
-        has_resource = any(r.category in ("Measured", "Indicated", "Inferred", "Measured+Indicated", "Indicated+Inferred") for r in rows)
+        # Check for reserve vs resource rows
+        _RESERVE_CATS = {"Proven", "Probable", "Proven+Probable"}
+        _RESOURCE_CATS = {"Measured", "Indicated", "Inferred", "Measured+Indicated", "Indicated+Inferred"}
+        has_reserve = any(r.category in _RESERVE_CATS for r in rows)
+        has_resource = any(r.category in _RESOURCE_CATS for r in rows)
 
         if has_reserve and not has_resource:
+            # Pure reserve table — skip entirely (reserve parsing is future)
             resource_or_reserve = "reserve"
+            warnings.append("reserve_table_skipped")
+            continue
         elif has_reserve and has_resource:
             warnings.append("mixed_resource_reserve_table")
+            # Filter out only the reserve category rows, keep totals/sub-totals
+            rows = [r for r in rows if r.category not in _RESERVE_CATS]
 
-        # Keep only resource rows (spec: reserve parsing is future)
-        resource_rows = [r for r in rows if r.category not in ("Proven", "Probable", "Proven+Probable")]
-        if has_reserve:
-            warnings.append("reserve_rows_present_but_ignored")
-
-        all_rows.extend(resource_rows)
-
-    # When aggregating multiple tables, drop intermediate Total/sub-total rows
-    # and recompute a single Total from category rows
-    _INDIVIDUAL_CATS = {"Measured", "Indicated", "Inferred", "Measured+Indicated", "Indicated+Inferred"}
-    category_rows = [r for r in all_rows if r.category in _INDIVIDUAL_CATS]
-
-    if len(tables) > 1 and category_rows:
-        # Multiple tables → totals are per-section, not meaningful aggregated
-        # Keep only individual category rows; downstream can sum if needed
-        all_rows = category_rows
-        warnings.append("intermediate_totals_dropped")
+        all_rows.extend(rows)
 
     if not all_rows:
         raise MalformedDocumentError("no_category_rows_extracted")

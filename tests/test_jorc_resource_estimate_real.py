@@ -73,8 +73,9 @@ class TestLTRRealFixture:
         assert "Inferred" in categories
 
     def test_rows_match_expected(self, ltr_result):
-        # Filter to non-Total rows
-        actual = [r for r in ltr_result.rows if r.category != "Total"]
+        # Filter to individual category rows only (no totals, sub-totals, stockpiles)
+        _INDIVIDUAL = {"Measured", "Indicated", "Inferred"}
+        actual = [r for r in ltr_result.rows if r.category in _INDIVIDUAL]
 
         # Match against expected rows in order
         for i, (exp_cat, exp_tonnes, exp_grade) in enumerate(EXPECTED_LTR_ROWS):
@@ -87,6 +88,11 @@ class TestLTRRealFixture:
             assert abs(row.grade - exp_grade) < GRADE_TOL, \
                 f"{exp_cat} row {i}: grade {row.grade} vs {exp_grade}"
             assert row.grade_unit == "%"
+
+    def test_sections_detected(self, ltr_result):
+        sections = {r.section for r in ltr_result.rows if r.section}
+        assert "Open Pit" in sections
+        assert "Underground" in sections
 
 
 # ─── BOE / Gould's Dam (U3O8) ────────────────────────────────────────

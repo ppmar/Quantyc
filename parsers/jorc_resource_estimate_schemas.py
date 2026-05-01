@@ -8,7 +8,10 @@ JORCCategory = Literal[
     "Proven", "Probable",                                   # reserves
     "Measured+Indicated", "Indicated+Inferred",             # combined resource rows
     "Proven+Probable",                                      # combined reserve rows
-    "Total",                                                # roll-up row
+    "Sub-total",                                            # per-section roll-up
+    "In-situ Total",                                        # in-situ total
+    "Stockpiles",                                           # stockpile row
+    "Total",                                                # grand total
 ]
 
 ResourceOrReserve = Literal["resource", "reserve"]

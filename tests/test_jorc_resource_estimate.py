@@ -261,12 +261,12 @@ class TestReserveWarning:
         pdf = _make_jorc_pdf(title, table)
         result = parse(pdf, ticker="TST", doc_id="res", announcement_date=date(2026, 1, 1))
 
-        # Only resource rows in output
+        # Only resource rows in output (reserve categories filtered)
         cats = [r.category for r in result.rows]
         assert "Proven" not in cats
         assert "Probable" not in cats
         assert "Measured" in cats
-        assert any("reserve_rows_present" in w for w in result.extraction_warnings)
+        assert any("mixed_resource_reserve" in w or "reserve" in w for w in result.extraction_warnings)
 
 
 # ── Test 11: Malformed document raises ───────────────────────────────

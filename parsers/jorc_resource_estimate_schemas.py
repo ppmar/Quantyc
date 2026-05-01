@@ -23,7 +23,8 @@ class JORCRow:
     grade_unit: str                       # 'g/t', '%', 'ppm', 'lb/t', etc.
     contained_metal: Optional[Decimal]
     contained_metal_unit: Optional[str]   # 'Moz', 'koz', 'kt', 'Mlb', etc.
-    raw_line: str
+    section: Optional[str] = None         # e.g. "Open Pit", "Underground", "Oxide", "Fresh"
+    raw_line: str = ""
 
 
 @dataclass(frozen=True)

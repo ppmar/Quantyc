@@ -40,6 +40,7 @@ def _safe_add_columns(conn):
         ("resources", "cutoff_grade", "REAL"),
         ("resources", "cutoff_grade_unit", "TEXT"),
         ("projects", "source", "TEXT"),
+        ("resources", "section", "TEXT"),
     ]
     for table, col, col_type in additions:
         try:

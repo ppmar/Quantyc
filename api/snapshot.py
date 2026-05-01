@@ -346,9 +346,9 @@ def api_company_snapshot(ticker: str):
         # Latest resource estimate
         resource_rows = conn.execute(
             """SELECT category, tonnes, grade, grade_unit, contained_metal, contained_metal_unit,
-                      effective_date, resource_or_reserve
+                      effective_date, resource_or_reserve, section
                FROM resources WHERE project_id = ?
-               ORDER BY effective_date DESC, resource_id DESC""",
+               ORDER BY effective_date DESC, resource_id ASC""",
             (pid,),
         ).fetchall()
 
@@ -368,6 +368,7 @@ def api_company_snapshot(ticker: str):
                 "contained_metal": r["contained_metal"],
                 "contained_metal_unit": r["contained_metal_unit"],
                 "type": r["resource_or_reserve"],
+                "section": r["section"],
             })
 
         # sqlite3.Row doesn't support .get(); safely read optional columns

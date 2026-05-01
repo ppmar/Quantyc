@@ -345,8 +345,8 @@ def _persist_jorc_estimate(doc_id: int, ticker: str, estimate) -> None:
                (project_id, document_id, effective_date, commodity,
                 resource_or_reserve, category, tonnes, grade, grade_unit,
                 contained_metal, contained_metal_unit,
-                cutoff_grade, cutoff_grade_unit, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                cutoff_grade, cutoff_grade_unit, section, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 project_id, doc_id, estimate.snapshot_date.isoformat(),
                 estimate.commodity, estimate.resource_or_reserve,
@@ -358,6 +358,7 @@ def _persist_jorc_estimate(doc_id: int, ticker: str, estimate) -> None:
                 row.contained_metal_unit,
                 float(estimate.cutoff_grade) if estimate.cutoff_grade is not None else None,
                 estimate.cutoff_grade_unit,
+                row.section,
                 now,
             ),
         )

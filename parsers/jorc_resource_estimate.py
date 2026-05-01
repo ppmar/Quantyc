@@ -412,27 +412,34 @@ def _find_jorc_tables(pdf_bytes: bytes) -> list[tuple[list[str], list[list[str]]
                     if first_cat_idx is None:
                         continue
 
-                    # Scan all rows BEFORE the first category row for column
-                    # header tokens. Real PDFs often have empty rows, merged
-                    # cells, or section sub-headers between the column headers
-                    # and the data rows (e.g. "Open Pit (cut-off grade = ...)").
+                    # Scan rows BEFORE the first category row for column headers.
+                    # Distinguish column-header rows (multiple cells with text)
+                    # from section-header rows (one cell with text, rest empty).
                     merged_header = [""] * len(table[0])
+                    data_start_idx = first_cat_idx
                     for i in range(first_cat_idx):
                         row = table[i]
                         if not row:
                             continue
-                        for j, cell in enumerate(row):
-                            if cell and j < len(merged_header):
-                                existing = merged_header[j].strip()
-                                addition = str(cell).strip()
-                                if addition:
-                                    merged_header[j] = (
-                                        f"{existing} {addition}" if existing else addition
-                                    )
+                        non_empty = sum(1 for c in row if c and str(c).strip())
+                        if non_empty >= 2:
+                            # Column header row — merge into headers
+                            for j, cell in enumerate(row):
+                                if cell and j < len(merged_header):
+                                    existing = merged_header[j].strip()
+                                    addition = str(cell).strip()
+                                    if addition:
+                                        merged_header[j] = (
+                                            f"{existing} {addition}" if existing else addition
+                                        )
+                        elif non_empty == 1:
+                            # Section header row (e.g. "Open Pit ...") — include in data
+                            # so _parse_jorc_table can detect it as a section label
+                            data_start_idx = min(data_start_idx, i)
 
                     headers = merged_header
                     data_rows = []
-                    for row in table[first_cat_idx:]:
+                    for row in table[data_start_idx:]:
                         cells = [str(c or "") for c in row]
                         data_rows.append(cells)
 
@@ -578,12 +585,31 @@ def _parse_jorc_table(
                     return val
         return None
 
+    # Strip cut-off info, parentheticals, pdfplumber newline artifacts
+    _SECTION_CLEAN = re.compile(r"\s*\(.*$", re.DOTALL)
+
     rows = []
+    current_section: Optional[str] = None
+
     for row_cells in data_rows:
         if not row_cells or category_col >= len(row_cells) or not row_cells[category_col]:
             continue
 
-        label = row_cells[category_col].strip().lower()
+        cell_text = row_cells[category_col].strip()
+        label = cell_text.lower()
+
+        # Detect section headers: first col has text, all others None/empty
+        other_cells = [row_cells[j] for j in range(len(row_cells)) if j != category_col]
+        all_others_empty = all(not (c or "").strip() for c in other_cells)
+
+        if all_others_empty and not any(cat in label for cat in _JORC_CATEGORIES):
+            # Section header row — extract clean section name
+            section_name = _SECTION_CLEAN.sub("", cell_text).strip()
+            # Collapse newlines from pdfplumber
+            section_name = re.sub(r"\s+", " ", section_name)
+            if section_name:
+                current_section = section_name
+            continue
 
         # Match category (try longer keys first so "measured + indicated" beats "measured")
         category = None
@@ -611,6 +637,7 @@ def _parse_jorc_table(
             grade_unit=grade_unit,
             contained_metal=contained_val,
             contained_metal_unit=contained_unit,
+            section=current_section,
             raw_line=raw_line,
         ))
 

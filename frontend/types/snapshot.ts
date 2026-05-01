@@ -25,6 +25,7 @@ export type ResourceRow = {
   contained_metal: number | null;
   contained_metal_unit: string | null;
   type: "resource" | "reserve";
+  section: string | null;
 };
 
 export type ProjectData = {

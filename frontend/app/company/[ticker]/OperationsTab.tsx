@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import type { ProjectData, ResourceRow } from "@/types/snapshot";
 
 function fmtTonnes(val: number | null) {
@@ -38,32 +39,57 @@ function stageBadge(stage: string | null) {
   );
 }
 
+function groupBySection(rows: ResourceRow[]): { section: string; rows: ResourceRow[] }[] {
+  const groups: { section: string; rows: ResourceRow[] }[] = [];
+  const seen = new Map<string, ResourceRow[]>();
+  for (const r of rows) {
+    const key = r.section ?? "_unsectioned";
+    if (!seen.has(key)) {
+      const arr: ResourceRow[] = [];
+      seen.set(key, arr);
+      groups.push({ section: r.section ?? "", rows: arr });
+    }
+    seen.get(key)!.push(r);
+  }
+  return groups;
+}
+
 function ResourceTable({ resources, resourceDate }: { resources: ResourceRow[]; resourceDate: string | null }) {
   if (resources.length === 0) return null;
 
   const resourceRows = resources.filter((r) => r.type === "resource");
   const reserveRows = resources.filter((r) => r.type === "reserve");
 
-  const renderSection = (rows: ResourceRow[], label: string) => {
-    if (rows.length === 0) return null;
-    return (
-      <>
-        <tr>
-          <td colSpan={4} className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium">
-            {label}
-          </td>
-        </tr>
-        {rows.map((r, i) => (
-          <tr key={`${label}-${i}`} className="hover:bg-white/[0.02]">
-            <td className="px-3 py-1.5 text-xs text-zinc-400">{r.category}</td>
-            <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtTonnes(r.tonnes_mt)}</td>
-            <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtGrade(r.grade, r.grade_unit)}</td>
-            <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtContained(r.contained_metal, r.contained_metal_unit)}</td>
+  const hasSections = resourceRows.some((r) => r.section);
+  const resourceGroups = hasSections ? groupBySection(resourceRows) : [{ section: "", rows: resourceRows }];
+  const reserveGroups = reserveRows.length > 0
+    ? (reserveRows.some((r) => r.section) ? groupBySection(reserveRows) : [{ section: "", rows: reserveRows }])
+    : [];
+
+  const renderRows = (rows: ResourceRow[], keyPrefix: string) =>
+    rows.map((r, i) => (
+      <tr key={`${keyPrefix}-${i}`} className="hover:bg-white/[0.02]">
+        <td className="px-3 py-1.5 text-xs text-zinc-400">{r.category}</td>
+        <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtTonnes(r.tonnes_mt)}</td>
+        <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtGrade(r.grade, r.grade_unit)}</td>
+        <td className="px-3 py-1.5 text-xs text-zinc-300 text-right">{fmtContained(r.contained_metal, r.contained_metal_unit)}</td>
+      </tr>
+    ));
+
+  const renderGrouped = (groups: { section: string; rows: ResourceRow[] }[], typeLabel: string) => (
+    <>
+      {groups.map((g, gi) => (
+        <React.Fragment key={`${typeLabel}-${gi}`}>
+          <tr>
+            <td colSpan={4} className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium">
+              {g.section ? `${typeLabel} — ${g.section}` : typeLabel}
+            </td>
           </tr>
-        ))}
-      </>
-    );
-  };
+          {renderRows(g.rows, `${typeLabel}-${gi}`)}
+        </React.Fragment>
+      ))}
+    </>
+  );
 
   return (
     <div className="mt-3">
@@ -78,8 +104,8 @@ function ResourceTable({ resources, resourceDate }: { resources: ResourceRow[]; 
             </tr>
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
-            {renderSection(resourceRows, "Mineral Resources")}
-            {renderSection(reserveRows, "Ore Reserves")}
+            {renderGrouped(resourceGroups, "Mineral Resources")}
+            {renderGrouped(reserveGroups, "Ore Reserves")}
           </tbody>
         </table>
       </div>

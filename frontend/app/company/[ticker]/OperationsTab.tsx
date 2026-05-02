@@ -41,45 +41,42 @@ function stageBadge(stage: string | null) {
 
 const TOTAL_CATS = new Set(["Total", "Sub-total", "In-situ Total", "Stockpiles"]);
 
-function ResourceTable({ resources, resourceDate }: { resources: ResourceRow[]; resourceDate: string | null }) {
-  if (resources.length === 0) return null;
+function splitBySections(resources: ResourceRow[], projectName: string) {
+  // Group rows by section, keeping unsectioned rows as a separate "Total" group
+  const sections: { label: string; rows: ResourceRow[] }[] = [];
+  const unsectioned: ResourceRow[] = [];
+  const sectionMap = new Map<string, ResourceRow[]>();
 
-  // Render rows in order, inserting section headers when section changes
-  let lastSection: string | null | undefined = undefined;
-  const tableRows: React.ReactNode[] = [];
-
-  for (let i = 0; i < resources.length; i++) {
-    const r = resources[i];
-    const isTotal = TOTAL_CATS.has(r.category);
-
-    // Section header when section changes (only for sectioned rows)
-    if (r.section && r.section !== lastSection) {
-      tableRows.push(
-        <tr key={`section-${i}`}>
-          <td colSpan={4} className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-zinc-500 font-medium border-t border-white/[0.04]">
-            {r.section}
-          </td>
-        </tr>
-      );
+  for (const r of resources) {
+    if (r.section) {
+      if (!sectionMap.has(r.section)) {
+        const arr: ResourceRow[] = [];
+        sectionMap.set(r.section, arr);
+        sections.push({ label: `${projectName} — ${r.section}`, rows: arr });
+      }
+      sectionMap.get(r.section)!.push(r);
+    } else {
+      unsectioned.push(r);
     }
-    lastSection = r.section;
-
-    const isBold = isTotal;
-    const textCls = isBold ? "text-zinc-200 font-medium" : "text-zinc-400";
-    const valCls = isBold ? "text-zinc-200 font-medium" : "text-zinc-300";
-
-    tableRows.push(
-      <tr key={`row-${i}`} className={`hover:bg-white/[0.02] ${isTotal && !r.section ? "border-t border-white/[0.08]" : ""}`}>
-        <td className={`px-3 py-1.5 text-xs ${textCls} ${r.section ? "pl-5" : ""}`}>{r.category}</td>
-        <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtTonnes(r.tonnes_mt)}</td>
-        <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtGrade(r.grade, r.grade_unit)}</td>
-        <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtContained(r.contained_metal, r.contained_metal_unit)}</td>
-      </tr>
-    );
   }
 
+  // If no sections detected, return all rows as one group
+  if (sections.length === 0) {
+    return [{ label: projectName, rows: resources }];
+  }
+
+  // Add unsectioned rows (In-situ Total, Stockpiles, Total) as a summary group
+  if (unsectioned.length > 0) {
+    sections.push({ label: `${projectName} — Total`, rows: unsectioned });
+  }
+
+  return sections;
+}
+
+function SectionTable({ label, rows }: { label: string; rows: ResourceRow[] }) {
   return (
     <div className="mt-3">
+      <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2 px-1">{label}</h4>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -91,10 +88,36 @@ function ResourceTable({ resources, resourceDate }: { resources: ResourceRow[]; 
             </tr>
           </thead>
           <tbody>
-            {tableRows}
+            {rows.map((r, i) => {
+              const isTotal = TOTAL_CATS.has(r.category);
+              const textCls = isTotal ? "text-zinc-200 font-medium" : "text-zinc-400";
+              const valCls = isTotal ? "text-zinc-200 font-medium" : "text-zinc-300";
+              return (
+                <tr key={i} className={`hover:bg-white/[0.02] ${isTotal ? "border-t border-white/[0.06]" : ""}`}>
+                  <td className={`px-3 py-1.5 text-xs ${textCls}`}>{r.category}</td>
+                  <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtTonnes(r.tonnes_mt)}</td>
+                  <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtGrade(r.grade, r.grade_unit)}</td>
+                  <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtContained(r.contained_metal, r.contained_metal_unit)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function ResourceTable({ resources, resourceDate, projectName }: { resources: ResourceRow[]; resourceDate: string | null; projectName: string }) {
+  if (resources.length === 0) return null;
+
+  const sections = splitBySections(resources, projectName);
+
+  return (
+    <div>
+      {sections.map((s, i) => (
+        <SectionTable key={i} label={s.label} rows={s.rows} />
+      ))}
       {resourceDate && (
         <p className="text-[10px] text-zinc-600 mt-2 px-3">Estimate as at {resourceDate}</p>
       )}
@@ -126,7 +149,7 @@ export function OperationsTab({ projects }: { projects: ProjectData[] }) {
               .join(" · ")}
           </p>
 
-          <ResourceTable resources={project.resources} resourceDate={project.resource_date} />
+          <ResourceTable resources={project.resources} resourceDate={project.resource_date} projectName={project.name} />
 
           {project.resources.length === 0 && (
             <p className="text-xs text-zinc-600 italic">No JORC estimate on file</p>

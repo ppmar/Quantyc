@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import type { ProjectData, ResourceRow } from "@/types/snapshot";
+import type { ProjectData, ResourceRow, StudyData } from "@/types/snapshot";
 
 function fmtTonnes(val: number | null) {
   if (val == null) return "—";
@@ -125,6 +125,95 @@ function ResourceTable({ resources, resourceDate, projectName }: { resources: Re
   );
 }
 
+function fmtMoney(val: number | null, currency: string | null) {
+  if (val == null) return "—";
+  const sym = currency === "USD" ? "US$" : currency === "AUD" ? "A$" : `${currency ?? ""}$`;
+  if (Math.abs(val) >= 1000) return `${sym}${(val / 1000).toFixed(2)}B`;
+  return `${sym}${val.toFixed(0)}M`;
+}
+
+function fmtPct(val: number | null) {
+  if (val == null) return "—";
+  return `${val.toFixed(1)}%`;
+}
+
+function StudyCard({ study }: { study: StudyData }) {
+  const ccy = study.reporting_currency;
+  const dr = study.discount_rate_pct != null ? study.discount_rate_pct.toFixed(0) : "?";
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 mb-3">
+        <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">{study.study_type}</h4>
+        {study.study_date && (
+          <span className="text-[10px] text-zinc-600">{study.study_date}</span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {study.post_tax_npv != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV{dr} post-tax</p>
+            <p className="text-sm text-zinc-200 font-medium">{fmtMoney(study.post_tax_npv, ccy)}</p>
+          </div>
+        )}
+        {study.pre_tax_npv != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV{dr} pre-tax</p>
+            <p className="text-sm text-zinc-200 font-medium">{fmtMoney(study.pre_tax_npv, ccy)}</p>
+          </div>
+        )}
+        {study.irr_pct != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">IRR</p>
+            <p className="text-sm text-zinc-200 font-medium">{fmtPct(study.irr_pct)}</p>
+          </div>
+        )}
+        {study.initial_capex != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Initial capex</p>
+            <p className="text-sm text-zinc-200 font-medium">{fmtMoney(study.initial_capex, ccy)}</p>
+          </div>
+        )}
+        {study.aisc_per_unit != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">AISC</p>
+            <p className="text-sm text-zinc-200 font-medium">{study.aisc_per_unit.toFixed(0)} {study.aisc_unit ?? ""}</p>
+          </div>
+        )}
+        {study.mine_life_years != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Mine life</p>
+            <p className="text-sm text-zinc-200 font-medium">{study.mine_life_years.toFixed(0)} years</p>
+          </div>
+        )}
+        {study.payback_years != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Payback</p>
+            <p className="text-sm text-zinc-200 font-medium">{study.payback_years.toFixed(1)} years</p>
+          </div>
+        )}
+        {study.recovery_pct != null && (
+          <div>
+            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Recovery</p>
+            <p className="text-sm text-zinc-200 font-medium">{fmtPct(study.recovery_pct)}</p>
+          </div>
+        )}
+      </div>
+
+      {study.price_assumptions && study.price_assumptions.length > 0 && (
+        <div className="mt-3 flex gap-3 flex-wrap">
+          {study.price_assumptions.map((pa, i) => (
+            <span key={i} className="text-[10px] text-zinc-500 border border-white/[0.06] rounded px-1.5 py-0.5">
+              {pa.commodity} @ {pa.price.toLocaleString()} {pa.unit}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function OperationsTab({ projects }: { projects: ProjectData[] }) {
   if (!projects || projects.length === 0) {
     return <p className="text-sm text-zinc-500">No project data yet.</p>;
@@ -149,9 +238,11 @@ export function OperationsTab({ projects }: { projects: ProjectData[] }) {
               .join(" · ")}
           </p>
 
+          {project.study && <StudyCard study={project.study} />}
+
           <ResourceTable resources={project.resources} resourceDate={project.resource_date} projectName={project.name} />
 
-          {project.resources.length === 0 && (
+          {!project.study && project.resources.length === 0 && (
             <p className="text-xs text-zinc-600 italic">No JORC estimate on file</p>
           )}
         </div>

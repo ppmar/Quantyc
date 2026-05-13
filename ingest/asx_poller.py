@@ -36,7 +36,7 @@ HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 PDF_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/pdf"}
 
 # Download and parse these doc types directly
-TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities", "resource_update"}
+TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities", "resource_update", "study_dfs"}
 # Also download these to scan for embedded 5B forms
 SCAN_DOC_TYPES = {"quarterly_activity"}
 

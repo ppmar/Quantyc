@@ -28,6 +28,27 @@ export type ResourceRow = {
   section: string | null;
 };
 
+export type StudyData = {
+  study_type: string;
+  study_date: string | null;
+  reporting_currency: string | null;
+  discount_rate_pct: number | null;
+  post_tax_npv: number | null;
+  pre_tax_npv: number | null;
+  irr_pct: number | null;
+  payback_years: number | null;
+  initial_capex: number | null;
+  sustaining_capex: number | null;
+  opex: number | null;
+  aisc_per_unit: number | null;
+  aisc_unit: string | null;
+  mine_life_years: number | null;
+  annual_production: number | null;
+  recovery_pct: number | null;
+  assumed_fx: number | null;
+  price_assumptions: { commodity: string; price: number; unit: string }[] | null;
+};
+
 export type ProjectData = {
   name: string;
   stage: string | null;
@@ -38,6 +59,7 @@ export type ProjectData = {
   primary_commodity: string | null;
   resources: ResourceRow[];
   resource_date: string | null;
+  study: StudyData | null;
 };
 
 export type CashSection = {

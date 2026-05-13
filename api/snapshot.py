@@ -371,6 +371,48 @@ def api_company_snapshot(ticker: str):
                 "section": r["section"],
             })
 
+        # Latest study
+        study_row = conn.execute(
+            """SELECT study_stage, study_date, mine_life_years, annual_production,
+                      recovery_pct, initial_capex, sustaining_capex, opex,
+                      post_tax_npv, pre_tax_npv, irr_pct, payback_years,
+                      aisc_per_unit, aisc_unit, assumed_price_deck, assumed_fx,
+                      reporting_currency, discount_rate_pct, extraction_model
+               FROM studies WHERE project_id = ?
+               ORDER BY study_date DESC LIMIT 1""",
+            (pid,),
+        ).fetchone()
+
+        study_out = None
+        if study_row:
+            import json as _json
+            price_deck = None
+            if study_row["assumed_price_deck"]:
+                try:
+                    price_deck = _json.loads(study_row["assumed_price_deck"])
+                except Exception:
+                    pass
+            study_out = {
+                "study_type": study_row["study_stage"],
+                "study_date": _fmt_date_display(study_row["study_date"]),
+                "reporting_currency": study_row["reporting_currency"],
+                "discount_rate_pct": study_row["discount_rate_pct"],
+                "post_tax_npv": study_row["post_tax_npv"],
+                "pre_tax_npv": study_row["pre_tax_npv"],
+                "irr_pct": study_row["irr_pct"],
+                "payback_years": study_row["payback_years"],
+                "initial_capex": study_row["initial_capex"],
+                "sustaining_capex": study_row["sustaining_capex"],
+                "opex": study_row["opex"],
+                "aisc_per_unit": study_row["aisc_per_unit"],
+                "aisc_unit": study_row["aisc_unit"],
+                "mine_life_years": study_row["mine_life_years"],
+                "annual_production": study_row["annual_production"],
+                "recovery_pct": study_row["recovery_pct"],
+                "assumed_fx": study_row["assumed_fx"],
+                "price_assumptions": price_deck,
+            }
+
         # sqlite3.Row doesn't support .get(); safely read optional columns
         try:
             source = proj["source"]
@@ -387,6 +429,7 @@ def api_company_snapshot(ticker: str):
             "primary_commodity": primary_commodity,
             "resources": resources_out,
             "resource_date": _fmt_date_display(latest_date) if latest_date else None,
+            "study": study_out,
         })
 
     has_projects = len(projects_data) > 0

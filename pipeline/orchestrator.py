@@ -69,7 +69,7 @@ def extract_classified() -> dict:
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
     from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities
 
-    STANDARDIZED_TYPES = {"appendix_5b", "issue_of_securities", "resource_update"}
+    STANDARDIZED_TYPES = {"appendix_5b", "issue_of_securities", "resource_update", "study_dfs"}
 
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
@@ -158,6 +158,101 @@ def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
 
     elif doc_type == "resource_update":
         _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats)
+
+    elif doc_type == "study_dfs":
+        _extract_dfs_study(doc_id, pdf_bytes, ticker, announcement_date, stats)
+
+
+def _extract_dfs_study(doc_id, pdf_bytes, ticker, announcement_date, stats):
+    """Run DFS Gemini extractor and persist to projects + studies."""
+    from datetime import date as date_type
+    from parsers.dfs_study import (
+        parse as parse_dfs, detect_profile,
+        ExtractionError, MalformedDocumentError, LLM_MODEL,
+    )
+
+    if not ticker or not announcement_date:
+        _mark_failed(doc_id, "missing_ticker_or_date")
+        stats["failed"] += 1
+        return
+
+    if not detect_profile(pdf_bytes):
+        _mark_skipped(doc_id)
+        stats["skipped"] += 1
+        return
+
+    ann_date = announcement_date
+    if isinstance(ann_date, str):
+        ann_date = date_type.fromisoformat(ann_date)
+
+    try:
+        result = parse_dfs(pdf_bytes, ticker=ticker, doc_id=str(doc_id),
+                           announcement_date=ann_date)
+    except (ExtractionError, MalformedDocumentError) as e:
+        _mark_failed(doc_id, f"dfs_parse_error:{e}")
+        stats["failed"] += 1
+        return
+
+    _persist_dfs_study(doc_id, ticker, result, LLM_MODEL)
+    _mark_parsed(doc_id)
+    stats["extracted"] += 1
+
+
+def _persist_dfs_study(doc_id, ticker, result, model_name):
+    """Persist DFS extraction to projects (upsert) + studies (insert)."""
+    import json as _json
+
+    conn = get_connection()
+    try:
+        company = conn.execute(
+            "SELECT company_id FROM companies WHERE ticker = ?", (ticker,)
+        ).fetchone()
+        if not company:
+            raise Exception(f"company_not_found:{ticker}")
+        company_id = company["company_id"]
+
+        project_id = _get_or_create_project(conn, company_id, result.project_name)
+
+        conn.execute("""
+            INSERT INTO studies (
+                project_id, document_id, study_stage, study_date,
+                mine_life_years, annual_production, recovery_pct,
+                initial_capex, sustaining_capex, opex,
+                post_tax_npv, pre_tax_npv, irr_pct, payback_years,
+                aisc_per_unit, aisc_unit,
+                assumed_price_deck, assumed_fx,
+                reporting_currency, discount_rate_pct,
+                extraction_method, extraction_model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            project_id, doc_id, result.study_type,
+            result.effective_date.isoformat() if result.effective_date else None,
+            float(result.mine_life_years) if result.mine_life_years else None,
+            float(result.annual_production) if result.annual_production else None,
+            float(result.recovery_pct) if result.recovery_pct else None,
+            float(result.initial_capex_millions) if result.initial_capex_millions else None,
+            float(result.sustaining_capex_millions) if result.sustaining_capex_millions else None,
+            float(result.opex_per_unit) if result.opex_per_unit else None,
+            float(result.post_tax_npv_millions) if result.post_tax_npv_millions else None,
+            float(result.pre_tax_npv_millions) if result.pre_tax_npv_millions else None,
+            float(result.irr_pct) if result.irr_pct else None,
+            float(result.payback_years) if result.payback_years else None,
+            float(result.aisc_per_unit) if result.aisc_per_unit else None,
+            result.aisc_unit,
+            _json.dumps([p.model_dump(mode="json") for p in result.price_assumptions]),
+            float(result.fx_assumption) if result.fx_assumption else None,
+            result.reporting_currency,
+            float(result.discount_rate_pct),
+            "llm",
+            model_name,
+        ))
+        conn.commit()
+        logger.info("Persisted DFS study for %s — %s", ticker, result.project_name)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats):

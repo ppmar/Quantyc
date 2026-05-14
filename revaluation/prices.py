@@ -29,13 +29,13 @@ class PriceFetchError(Exception):
 
 
 def fetch_yahoo_quote(symbol: str) -> Decimal:
-    """Single quote lookup. Raises on any failure — no silent fallback."""
-    url = "https://query2.finance.yahoo.com/v7/finance/quote"
+    """Single quote lookup via v8 chart endpoint. Raises on any failure."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; Quantyc/1.0)",
         "Accept": "application/json",
     }
-    params = {"symbols": symbol}
+    params = {"range": "1d", "interval": "1d"}
 
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=10)
@@ -44,11 +44,11 @@ def fetch_yahoo_quote(symbol: str) -> Decimal:
     except (requests.RequestException, ValueError) as e:
         raise PriceFetchError(f"yahoo_http_error:{type(e).__name__}:{e}")
 
-    results = data.get("quoteResponse", {}).get("result", [])
+    results = data.get("chart", {}).get("result", [])
     if not results:
         raise PriceFetchError(f"yahoo_empty_result:{symbol}")
 
-    price = results[0].get("regularMarketPrice")
+    price = results[0].get("meta", {}).get("regularMarketPrice")
     if price is None:
         raise PriceFetchError(f"yahoo_no_price:{symbol}")
 

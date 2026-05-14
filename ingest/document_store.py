@@ -45,8 +45,22 @@ def store_document(
     ).fetchone()
 
     if existing:
+        doc_id = existing["document_id"]
+        # Retry failed/skipped docs on re-fetch
+        status = conn.execute(
+            "SELECT parse_status FROM documents WHERE document_id = ?", (doc_id,)
+        ).fetchone()
+        if status and status["parse_status"] in ("failed", "skipped"):
+            conn.execute(
+                "UPDATE documents SET parse_status = 'pending', parse_error = NULL WHERE document_id = ?",
+                (doc_id,),
+            )
+            conn.commit()
+            conn.close()
+            logger.info("Reset doc %d for %s to pending (was %s)", doc_id, ticker, status["parse_status"])
+            return doc_id, True  # treat as new so poller re-processes
         conn.close()
-        return existing["document_id"], False
+        return doc_id, False
 
     # Ensure company row exists
     conn.execute(

@@ -118,28 +118,35 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
     )
     warnings.extend(conv_warnings)
 
-    # Annual revenue uplift in USD
-    delta_price_usd = inp.price_spot_usd - inp.price_dfs_usd
-    delta_revenue_annual_usd = normalized_production * delta_price_usd
-
     # Annuity factor
     a = annuity_factor(inp.discount_rate_pct, inp.mine_life_years)
 
-    # ΔNPV in USD, then convert to reporting_currency millions
-    delta_npv_usd = delta_revenue_annual_usd * a * (Decimal("1") - tax_rate / Decimal("100"))
-    delta_npv_usd_millions = delta_npv_usd / Decimal("1000000")
-
+    # Compute delta_price in the study's reporting currency
+    # price_spot_usd is always USD. price_dfs_usd may be in reporting_currency.
     if inp.reporting_currency == "USD":
-        fx_factor = Decimal("1")
+        # Both prices in USD — direct comparison
+        delta_price = inp.price_spot_usd - inp.price_dfs_usd
+        fx_divisor = Decimal("1")
     elif inp.reporting_currency == "AUD":
         if inp.fx_rate is None:
             raise RevaluationError("fx_rate_required_for_aud_reporting_with_usd_prices")
-        # fx_rate convention: AUD per USD (so AUD value = USD value * fx_rate when fx_rate > 1)
-        fx_factor = inp.fx_rate
+        # fx_rate is AUDUSD (e.g., 0.7225 means 1 AUD = 0.7225 USD)
+        # Convert spot USD to AUD: spot_aud = spot_usd / fx_rate
+        spot_in_aud = inp.price_spot_usd / inp.fx_rate
+        # DFS price is already in AUD for AUD-reporting studies
+        delta_price = spot_in_aud - inp.price_dfs_usd
+        fx_divisor = Decimal("1")  # already in AUD
     else:
         raise RevaluationError(f"unsupported_reporting_currency:{inp.reporting_currency}")
 
-    delta_npv_reporting_currency = delta_npv_usd_millions * fx_factor
+    # Annual revenue uplift in reporting currency
+    delta_revenue_annual_usd = normalized_production * delta_price
+
+    # ΔNPV in reporting_currency millions
+    delta_npv = delta_revenue_annual_usd * a * (Decimal("1") - tax_rate / Decimal("100"))
+    delta_npv_millions = delta_npv / Decimal("1000000")
+
+    delta_npv_reporting_currency = delta_npv_millions
 
     npv_spot = inp.npv_dfs + delta_npv_reporting_currency
     npv_uplift = npv_spot - inp.npv_dfs

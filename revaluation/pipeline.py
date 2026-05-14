@@ -62,6 +62,13 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # Production unit: oz for Au, t for Cu (per LLM prompt instructions)
     production_unit = "oz" if commodity == "Au" else "t"
 
+    # Sanity check: if Au production < 1000, Gemini likely reported in koz
+    annual_prod = study["annual_production"]
+    if commodity == "Au" and annual_prod is not None and annual_prod < 1000:
+        logger.warning("Study %d: annual_production=%.1f oz looks like koz, multiplying by 1000",
+                        study_id, annual_prod)
+        annual_prod = annual_prod * 1000
+
     # Extract DFS price assumption for primary commodity
     price_deck = json.loads(study["assumed_price_deck"] or "[]")
     price_dfs = None
@@ -90,7 +97,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         commodity=commodity,
         price_dfs_usd=price_dfs,
         price_spot_usd=price_spot,
-        annual_production=Decimal(str(study["annual_production"])),
+        annual_production=Decimal(str(annual_prod)),
         annual_production_unit=production_unit,
         mine_life_years=Decimal(str(study["mine_life_years"])),
         discount_rate_pct=Decimal(str(study["discount_rate_pct"])),

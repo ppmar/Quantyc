@@ -22,7 +22,7 @@ from flask_cors import CORS
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-from db import init_db
+from db import init_db, get_connection
 
 # Pipeline progress tracking
 pipeline_status = {
@@ -174,6 +174,26 @@ def _run_orchestrate():
         pipeline_status["error"] = traceback.format_exc().split("\n")[-2]
         pipeline_status["running"] = False
         logger.error("Orchestrator failed:\n%s", traceback.format_exc())
+
+
+# ---------------------------------------------------------------------------
+# Data sync endpoint (import SQL from local extraction)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/sync", methods=["POST"])
+def api_sync():
+    """Import SQL statements into the database. Body: { "sql": "INSERT ..." }"""
+    data = request.get_json(silent=True) or {}
+    sql = data.get("sql", "")
+    if not sql:
+        return jsonify({"error": "No SQL provided"}), 400
+    try:
+        conn = get_connection()
+        conn.executescript(sql)
+        conn.close()
+        return jsonify({"status": "ok", "length": len(sql)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------

@@ -193,13 +193,25 @@ def _extract_dfs_study(doc_id, pdf_bytes, ticker, announcement_date, stats):
         stats["failed"] += 1
         return
 
-    _persist_dfs_study(doc_id, ticker, result, LLM_MODEL)
+    study_id = _persist_dfs_study(doc_id, ticker, result, LLM_MODEL)
     _mark_parsed(doc_id)
     stats["extracted"] += 1
 
+    # Auto-trigger revaluation if study was persisted (Au/Cu only)
+    if study_id:
+        try:
+            from revaluation.pipeline import revalue_study
+            conn = get_connection()
+            reval_id = revalue_study(conn, study_id)
+            if reval_id:
+                logger.info("Auto-revaluation #%d for study %d (%s)", reval_id, study_id, ticker)
+            conn.close()
+        except Exception as e:
+            logger.warning("Auto-revaluation failed for study %d: %s", study_id, e)
+
 
 def _persist_dfs_study(doc_id, ticker, result, model_name):
-    """Persist DFS extraction to projects (upsert) + studies (insert)."""
+    """Persist DFS extraction to projects (upsert) + studies (insert). Returns study_id."""
     import json as _json
 
     conn = get_connection()
@@ -213,7 +225,18 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
 
         project_id = _get_or_create_project(conn, company_id, result.project_name)
 
-        conn.execute("""
+        # Ensure project_commodities has the primary commodity
+        existing = conn.execute(
+            "SELECT id FROM project_commodities WHERE project_id = ? AND commodity = ?",
+            (project_id, result.primary_commodity),
+        ).fetchone()
+        if not existing:
+            conn.execute(
+                "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, ?, 1)",
+                (project_id, result.primary_commodity),
+            )
+
+        cur = conn.execute("""
             INSERT INTO studies (
                 project_id, document_id, study_stage, study_date,
                 mine_life_years, annual_production, recovery_pct,
@@ -221,9 +244,9 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
                 post_tax_npv, pre_tax_npv, irr_pct, payback_years,
                 aisc_per_unit, aisc_unit,
                 assumed_price_deck, assumed_fx,
-                reporting_currency, discount_rate_pct,
+                reporting_currency, discount_rate_pct, tax_rate_pct,
                 extraction_method, extraction_model
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             project_id, doc_id, result.study_type,
             result.effective_date.isoformat() if result.effective_date else None,
@@ -243,11 +266,14 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
             float(result.fx_assumption) if result.fx_assumption else None,
             result.reporting_currency,
             float(result.discount_rate_pct),
+            float(result.tax_rate_pct) if result.tax_rate_pct else None,
             "llm",
             model_name,
         ))
         conn.commit()
-        logger.info("Persisted DFS study for %s — %s", ticker, result.project_name)
+        study_id = cur.lastrowid
+        logger.info("Persisted DFS study #%d for %s — %s", study_id, ticker, result.project_name)
+        return study_id
     except Exception:
         conn.rollback()
         raise

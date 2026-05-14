@@ -8,6 +8,7 @@ import logging
 import os
 import re
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from pydantic import ValidationError
@@ -34,6 +35,10 @@ _DFS_PROFILE_PATTERNS = [
     re.compile(r"Definitive\s+Feasibility\s+Study", re.IGNORECASE),
     re.compile(r"\bDFS\b", re.IGNORECASE),
     re.compile(r"Final\s+Feasibility\s+Study", re.IGNORECASE),
+    re.compile(r"Bankable\s+Feasibility\s+Study", re.IGNORECASE),
+    re.compile(r"\bBFS\b", re.IGNORECASE),
+    re.compile(r"Feasibility\s+(?:Study\s+)?(?:Update|Results|Outcomes)", re.IGNORECASE),
+    re.compile(r"Feasibility\s+Study\s+(?:Confirms|Delivers|Completed?)", re.IGNORECASE),
 ]
 
 _DFS_DISQUALIFIER_PATTERNS = [
@@ -67,8 +72,8 @@ def detect_profile(pdf_bytes: bytes) -> bool:
 
     has_disqualifier = any(p.search(first_page_text or "") for p in _DFS_DISQUALIFIER_PATTERNS)
     if has_disqualifier:
-        # Allow if DFS profile pattern also appears on page 1 (DFS that mentions PFS history)
-        if any(p.search(first_page_text) for p in _DFS_PROFILE_PATTERNS[:1]):
+        # Allow if any DFS profile pattern also appears on page 1 (DFS that mentions PFS history)
+        if any(p.search(first_page_text or "") for p in _DFS_PROFILE_PATTERNS):
             return True
         return False
 
@@ -77,21 +82,14 @@ def detect_profile(pdf_bytes: bytes) -> bool:
 
 # ─── LLM extraction ──────────────────────────────────────────────────
 
-EXTRACTION_PROMPT = """You are extracting economic parameters from a Definitive Feasibility Study (DFS) published by an ASX-listed mining company.
+_PROMPT_PATH = Path(__file__).parent / "dfs_study_prompt.md"
 
-Extract structured data per the provided schema.
 
-CRITICAL RULES:
-1. Use null for any field where the value is not stated explicitly in the document. Never invent or estimate.
-2. Distinguish post-tax NPV from pre-tax NPV. Populate each only with its specific value.
-3. The "reporting_currency" is the currency of the headline NPV. If capex is in a different currency, normalize to reporting_currency ONLY if an explicit FX rate is given; otherwise add to extraction_warnings.
-4. Monetary values are in MILLIONS of reporting_currency. "$2.4 billion NPV" → 2400.
-5. discount_rate_pct is REQUIRED — DFS always state their discount rate (e.g., 8.0 for "NPV8" or "NPV at 8%").
-6. project_name is the deposit/project name only (e.g., "Hemi", "Kathleen Valley", "Pilgangoora"). Strip trailing "Project", "Mine", "Deposit". Never use placeholder text.
-7. price_assumptions: extract base case prices used in the economic model. One entry per commodity. Include unit explicitly.
-8. study_type: "DFS" for first DFS, "Updated DFS" or "Revised DFS" if explicitly stated, "FFS" for Final Feasibility Study.
-9. extraction_warnings: include concerns like mixed currencies without FX, multiple scenarios where you picked base case, project_name ambiguity.
-10. All numeric fields must be single numbers, not ranges. If a value is a range (e.g., "6-7 Mt/yr"), use the midpoint (6.5) and add a warning to extraction_warnings noting the original range."""
+def _load_extraction_prompt() -> str:
+    return _PROMPT_PATH.read_text(encoding="utf-8")
+
+
+EXTRACTION_PROMPT = _load_extraction_prompt()
 
 
 def _fix_string_nulls(obj):

@@ -236,6 +236,9 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
     elif doc_type == "resource_update":
         _extract_resource_update(doc_id, pdf_bytes)
 
+    elif doc_type == "study_dfs":
+        _extract_dfs(doc_id, pdf_bytes)
+
     elif doc_type in SCAN_DOC_TYPES:
         # Quarterly activity report — scan for embedded 5B
         found_type = contains_standardized_form(pdf_bytes)
@@ -254,6 +257,60 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
                 _mark_status(doc_id, "parsed")
         else:
             _mark_status(doc_id, "skipped")
+
+
+def _extract_dfs(doc_id: int, pdf_bytes: bytes) -> None:
+    """Parse a DFS study and persist to projects + studies, then auto-revalue."""
+    from parsers.dfs_study import parse as parse_dfs, ExtractionError, MalformedDocumentError, LLM_MODEL
+    from pipeline.orchestrator import _persist_dfs_study
+
+    conn = get_connection()
+    doc = conn.execute(
+        "SELECT ticker, announcement_date FROM documents WHERE document_id = ?", (doc_id,)
+    ).fetchone()
+    conn.close()
+
+    if not doc:
+        _mark_status(doc_id, "failed", "missing_document_row")
+        return
+
+    ticker = doc["ticker"]
+    ann_date_str = doc["announcement_date"]
+
+    from datetime import date as date_type
+    ann_date = date_type.fromisoformat(ann_date_str) if ann_date_str else date_type.today()
+
+    try:
+        result = parse_dfs(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
+    except MalformedDocumentError:
+        logger.info("Doc %d: not a DFS, skipping", doc_id)
+        _mark_status(doc_id, "skipped")
+        return
+    except ExtractionError as e:
+        logger.warning("Doc %d: DFS extraction failed: %s", doc_id, e)
+        _mark_status(doc_id, "failed", f"dfs_parse_error:{e}")
+        return
+    except Exception as e:
+        logger.warning("Doc %d: DFS unexpected error: %s", doc_id, e)
+        _mark_status(doc_id, "failed", f"dfs_unexpected:{e}")
+        return
+
+    study_id = _persist_dfs_study(doc_id, ticker, result, LLM_MODEL)
+    _mark_status(doc_id, "parsed")
+    logger.info("Doc %d: parsed DFS for %s — %s, NPV=%s", doc_id, ticker, result.project_name,
+                result.post_tax_npv_millions)
+
+    # Auto-trigger revaluation
+    if study_id:
+        try:
+            from revaluation.pipeline import revalue_study
+            conn = get_connection()
+            reval_id = revalue_study(conn, study_id)
+            if reval_id:
+                logger.info("Auto-revaluation #%d for study %d (%s)", reval_id, study_id, ticker)
+            conn.close()
+        except Exception as e:
+            logger.warning("Auto-revaluation failed for study %d: %s", study_id, e)
 
 
 def _extract_resource_update(doc_id: int, pdf_bytes: bytes) -> None:

@@ -27,7 +27,13 @@ HEADLINE_KEYWORDS: list[tuple[str, list[str]]] = [
         "appendix 5b", "quarterly cash flow", "quarterly cashflow",
     ]),
     ("study_dfs", [
-        "definitive feasibility", "dfs",
+        "definitive feasibility", "dfs results", "dfs outcomes",
+        "dfs confirms", "dfs delivers", "dfs update", "dfs completion",
+        "dfs completed", "updated dfs", "revised dfs", "optimised dfs",
+        "final feasibility study", "ffs results",
+        "bankable feasibility study", "bfs results",
+        "feasibility update", "feasibility study results",
+        "dfs",
     ]),
     ("study_pfs", [
         "pre-feasibility", "pfs",

@@ -48,6 +48,10 @@ class DFSExtraction(BaseModel):
     recovery_pct: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
 
     # ─── Assumptions ─────────────────────────────────────────────────
+    # ─── Tax ─────────────────────────────────────────────────────
+    tax_rate_pct: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"),
+                                            description="Effective tax rate (corporate + royalty), e.g., 30.0")
+
     price_assumptions: list[PriceAssumption] = Field(default_factory=list)
     fx_assumption: Optional[Decimal] = Field(None, description="FX rate if reported, e.g., 0.66 for AUD/USD")
     fx_pair: Optional[str] = Field(None, description="e.g., 'AUD/USD'")

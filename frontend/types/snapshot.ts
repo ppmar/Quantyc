@@ -49,6 +49,30 @@ export type StudyData = {
   price_assumptions: { commodity: string; price: number; unit: string }[] | null;
 };
 
+export type RevaluationData = {
+  commodity: string;
+  price_dfs: number;
+  price_spot: number;
+  price_unit: string;
+  fx_rate: number | null;
+  annual_production: number;
+  annual_production_unit: string;
+  mine_life_years: number;
+  discount_rate_pct: number;
+  tax_rate_pct: number;
+  annuity_factor: number;
+  npv_dfs: number;
+  npv_spot: number;
+  npv_uplift: number;
+  npv_uplift_pct: number;
+  reporting_currency: string | null;
+  method_version: string;
+  computed_at: string;
+  spot_source: string;
+  spot_fetched_at: string;
+  warnings: string[];
+};
+
 export type ProjectData = {
   name: string;
   stage: string | null;
@@ -60,6 +84,7 @@ export type ProjectData = {
   resources: ResourceRow[];
   resource_date: string | null;
   study: StudyData | null;
+  revaluation: RevaluationData | null;
 };
 
 export type CashSection = {

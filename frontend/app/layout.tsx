@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/nav";
+import { PipelineProgress } from "@/components/pipeline-progress";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,6 +32,9 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col tabular-nums">
         <Nav />
         <main className="flex-1 mx-auto w-full max-w-6xl px-6 lg:px-8 py-8">
+          <div className="mb-4">
+            <PipelineProgress />
+          </div>
           {children}
         </main>
       </body>

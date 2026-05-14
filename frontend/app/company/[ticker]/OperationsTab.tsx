@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import type { ProjectData, ResourceRow, StudyData } from "@/types/snapshot";
+import type { ProjectData, ResourceRow, StudyData, RevaluationData } from "@/types/snapshot";
 
 function fmtTonnes(val: number | null) {
   if (val == null) return "—";
@@ -214,6 +214,110 @@ function StudyCard({ study }: { study: StudyData }) {
   );
 }
 
+function signalColor(upliftPct: number) {
+  if (upliftPct > 0.5) return "text-emerald-400";
+  if (upliftPct > 0.15) return "text-emerald-500";
+  if (upliftPct > 0) return "text-zinc-300";
+  if (upliftPct > -0.15) return "text-zinc-400";
+  if (upliftPct > -0.5) return "text-amber-400";
+  return "text-red-400";
+}
+
+function signalBorderColor(upliftPct: number) {
+  if (upliftPct > 0.5) return "border-emerald-800";
+  if (upliftPct > 0.15) return "border-emerald-900";
+  if (upliftPct > 0) return "border-white/[0.06]";
+  if (upliftPct > -0.15) return "border-white/[0.06]";
+  if (upliftPct > -0.5) return "border-amber-900";
+  return "border-red-900";
+}
+
+function RevaluationCard({ reval }: { reval: RevaluationData }) {
+  const ccy = reval.reporting_currency === "USD" ? "US$" : reval.reporting_currency === "AUD" ? "A$" : `${reval.reporting_currency ?? ""}$`;
+  const upliftPct = reval.npv_uplift_pct;
+  const priceChangePct = ((reval.price_spot - reval.price_dfs) / reval.price_dfs) * 100;
+
+  const spotDate = reval.spot_fetched_at
+    ? new Date(reval.spot_fetched_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
+    : "";
+
+  return (
+    <div className={`mt-4 border rounded-lg p-4 ${signalBorderColor(upliftPct)} bg-white/[0.02]`}>
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+          Spot revaluation
+        </h4>
+        <span className={`text-lg font-semibold tabular-nums ${signalColor(upliftPct)}`}>
+          {upliftPct >= 0 ? "+" : ""}{(upliftPct * 100).toFixed(0)}%
+        </span>
+      </div>
+
+      {/* Price comparison */}
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">DFS assumed</p>
+          <p className="text-sm text-zinc-400 tabular-nums">
+            {reval.price_dfs.toLocaleString(undefined, { minimumFractionDigits: reval.commodity === "Cu" ? 2 : 0 })} {reval.price_unit}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Spot price</p>
+          <p className="text-sm text-zinc-200 font-medium tabular-nums">
+            {reval.price_spot.toLocaleString(undefined, { minimumFractionDigits: reval.commodity === "Cu" ? 2 : 0 })} {reval.price_unit}
+            <span className={`ml-1.5 text-xs ${priceChangePct >= 0 ? "text-emerald-500" : "text-red-400"}`}>
+              {priceChangePct >= 0 ? "+" : ""}{priceChangePct.toFixed(0)}%
+            </span>
+          </p>
+        </div>
+      </div>
+
+      {/* NPV comparison — the main signal */}
+      <div className="grid grid-cols-3 gap-3 py-3 border-t border-white/[0.06]">
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV (DFS)</p>
+          <p className="text-sm text-zinc-400 tabular-nums">{ccy}{reval.npv_dfs.toLocaleString(undefined, { maximumFractionDigits: 0 })}M</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV (at spot)</p>
+          <p className="text-sm text-zinc-200 font-medium tabular-nums">{ccy}{reval.npv_spot.toLocaleString(undefined, { maximumFractionDigits: 0 })}M</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Uplift</p>
+          <p className={`text-sm font-medium tabular-nums ${signalColor(upliftPct)}`}>
+            {reval.npv_uplift >= 0 ? "+" : ""}{ccy}{reval.npv_uplift.toLocaleString(undefined, { maximumFractionDigits: 0 })}M
+          </p>
+        </div>
+      </div>
+
+      {/* Assumptions row */}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3">
+        <span className="text-[10px] text-zinc-600 tabular-nums">
+          {reval.annual_production.toLocaleString()} {reval.annual_production_unit}/yr
+        </span>
+        <span className="text-[10px] text-zinc-600 tabular-nums">
+          {reval.mine_life_years.toFixed(0)}yr mine life
+        </span>
+        <span className="text-[10px] text-zinc-600 tabular-nums">
+          {reval.discount_rate_pct.toFixed(0)}% discount
+        </span>
+        <span className="text-[10px] text-zinc-600 tabular-nums">
+          {reval.tax_rate_pct.toFixed(0)}% tax{reval.warnings.some(w => w.includes("defaulted")) ? " (default)" : ""}
+        </span>
+        {reval.fx_rate != null && (
+          <span className="text-[10px] text-zinc-600 tabular-nums">
+            FX {reval.fx_rate.toFixed(4)}
+          </span>
+        )}
+      </div>
+
+      {/* Provenance */}
+      <p className="text-[10px] text-zinc-700 mt-2">
+        {reval.spot_source} · {spotDate} · {reval.method_version}
+      </p>
+    </div>
+  );
+}
+
 export function OperationsTab({ projects }: { projects: ProjectData[] }) {
   if (!projects || projects.length === 0) {
     return <p className="text-sm text-zinc-500">No project data yet.</p>;
@@ -239,6 +343,8 @@ export function OperationsTab({ projects }: { projects: ProjectData[] }) {
           </p>
 
           {project.study && <StudyCard study={project.study} />}
+
+          {project.revaluation && <RevaluationCard reval={project.revaluation} />}
 
           <ResourceTable resources={project.resources} resourceDate={project.resource_date} projectName={project.name} />
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
-const DEFAULT_SCAN_COUNT = 200;
+const DEFAULT_SCAN_COUNT = 500;
 const DEFAULT_TICKERS = [
   // Majors & mid-tier
   "BHP", "RIO", "FMG", "S32", "NST", "EVN", "NEM", "RRL", "PRU", "RMS",

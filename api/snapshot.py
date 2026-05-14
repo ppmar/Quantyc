@@ -413,6 +413,60 @@ def api_company_snapshot(ticker: str):
                 "price_assumptions": price_deck,
             }
 
+        # Latest revaluation for this project
+        reval_out = None
+        try:
+            import json as _rjson
+            reval_row = conn.execute(
+                """SELECT r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
+                          r.annual_production, r.annual_production_unit,
+                          r.mine_life_years, r.discount_rate_pct, r.tax_rate_pct,
+                          r.annuity_factor, r.npv_dfs, r.npv_spot,
+                          r.npv_uplift, r.npv_uplift_pct,
+                          r.method_version, r.warnings, r.computed_at,
+                          cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
+                          s.reporting_currency
+                   FROM revaluations r
+                   JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
+                   JOIN studies s ON s.study_id = r.study_id
+                   WHERE r.project_id = ?
+                   ORDER BY r.computed_at DESC LIMIT 1""",
+                (pid,),
+            ).fetchone()
+            if reval_row:
+                warnings = []
+                if reval_row["warnings"]:
+                    try:
+                        warnings = _rjson.loads(reval_row["warnings"])
+                    except Exception:
+                        pass
+                price_unit = "USD/oz" if reval_row["commodity"] == "Au" else "USD/lb"
+                reval_out = {
+                    "commodity": reval_row["commodity"],
+                    "price_dfs": reval_row["price_dfs"],
+                    "price_spot": reval_row["price_spot"],
+                    "price_unit": price_unit,
+                    "fx_rate": reval_row["fx_rate"],
+                    "annual_production": reval_row["annual_production"],
+                    "annual_production_unit": reval_row["annual_production_unit"],
+                    "mine_life_years": reval_row["mine_life_years"],
+                    "discount_rate_pct": reval_row["discount_rate_pct"],
+                    "tax_rate_pct": reval_row["tax_rate_pct"],
+                    "annuity_factor": reval_row["annuity_factor"],
+                    "npv_dfs": reval_row["npv_dfs"],
+                    "npv_spot": reval_row["npv_spot"],
+                    "npv_uplift": reval_row["npv_uplift"],
+                    "npv_uplift_pct": reval_row["npv_uplift_pct"],
+                    "reporting_currency": reval_row["reporting_currency"],
+                    "method_version": reval_row["method_version"],
+                    "computed_at": reval_row["computed_at"],
+                    "spot_source": reval_row["spot_source"],
+                    "spot_fetched_at": reval_row["spot_fetched_at"],
+                    "warnings": warnings,
+                }
+        except Exception:
+            pass  # revaluations table may not exist on older DBs
+
         # sqlite3.Row doesn't support .get(); safely read optional columns
         try:
             source = proj["source"]
@@ -430,6 +484,7 @@ def api_company_snapshot(ticker: str):
             "resources": resources_out,
             "resource_date": _fmt_date_display(latest_date) if latest_date else None,
             "study": study_out,
+            "revaluation": reval_out,
         })
 
     has_projects = len(projects_data) > 0

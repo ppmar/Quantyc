@@ -40,7 +40,37 @@ def test_annuity_factor_negative_years_raises():
 
 
 def test_revalue_gold_aud_reporting():
-    """Hand-computed Hemi-like scenario at 3500 USD/oz."""
+    """Hemi-like scenario: DFS price in USD, NPV reported in AUD,
+    FX is Yahoo AUDUSD=X convention (USD per AUD)."""
+    inp = RevaluationInput(
+        commodity="Au",
+        price_dfs_usd=Decimal("1900"),       # USD per invariant I2
+        price_spot_usd=Decimal("3500"),      # USD per invariant I3
+        annual_production=Decimal("180000"),
+        annual_production_unit="oz",
+        mine_life_years=Decimal("10"),
+        discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("30.0"),
+        npv_dfs=Decimal("985"),              # AUD M
+        reporting_currency="AUD",
+        fx_rate=Decimal("0.6452"),           # USD per AUD (Yahoo convention)
+    )
+    result = revalue(inp)
+    # ΔPrice_USD = 1600 USD/oz
+    # ΔRev_USD  = 180,000 * 1600 = 288,000,000 USD/yr
+    # A(5%,10)  = 7.7217
+    # ΔNPV_USD  = 288e6 * 7.7217 * 0.70 / 1e6 = 1556.70 USD M
+    # ΔNPV_AUD  = 1556.70 / 0.6452              = 2412.74 AUD M
+    # NPV_spot  = 985 + 2412.74                 = 3397.74 AUD M
+    assert abs(result.npv_spot - Decimal("3397.74")) < Decimal("0.10")
+    assert abs(result.npv_uplift - Decimal("2412.74")) < Decimal("0.10")
+    assert abs(result.delta_revenue_annual_usd - Decimal("288000000")) < Decimal("1")
+    assert result.method_version == "first_order_v2"
+    assert result.warnings == []
+
+
+def test_revalue_gold_usd_reporting_magnitude():
+    """Same scenario but reporting in USD: no FX conversion."""
     inp = RevaluationInput(
         commodity="Au",
         price_dfs_usd=Decimal("1900"),
@@ -51,21 +81,49 @@ def test_revalue_gold_aud_reporting():
         discount_rate_pct=Decimal("5.0"),
         tax_rate_pct=Decimal("30.0"),
         npv_dfs=Decimal("985"),
-        reporting_currency="AUD",
-        fx_rate=Decimal("1.55"),
+        reporting_currency="USD",
+        fx_rate=None,
     )
     result = revalue(inp)
-    # ΔPrice = 1600 USD/oz
-    # ΔRev = 180000 * 1600 = 288,000,000 USD/year
-    # A(5%, 10) = 7.7217
-    # ΔNPV_USD = 288,000,000 * 7.7217 * 0.70 / 1,000,000 = 1556.34 USD M
-    # ΔNPV_AUD = 1556.34 * 1.55 = 2412.32 AUD M
-    # NPV_spot = 985 + 2412.32 = 3397.32 AUD M
-    assert abs(result.npv_spot - Decimal("3397.32")) < Decimal("1.0")
-    assert result.npv_uplift > 0
-    assert result.npv_uplift_pct > 0
-    assert result.method_version == "first_order_v1"
-    assert result.warnings == []
+    # NPV_spot = 985 + 1556.70 = 2541.70 USD M
+    assert abs(result.npv_spot - Decimal("2541.70")) < Decimal("0.10")
+    assert abs(result.npv_uplift - Decimal("1556.70")) < Decimal("0.10")
+
+
+def test_revalue_sanbrado_au_usd():
+    """Sanbrado Gold (West African Resources) — USD-reporting DFS.
+    Production back-solved from displayed uplift = 4063 M at 3384 USD/oz uplift,
+    11yr life, 5% rate, 32% tax: production ~ 212,580 oz/yr.
+    """
+    inp = RevaluationInput(
+        commodity="Au",
+        price_dfs_usd=Decimal("1300"),
+        price_spot_usd=Decimal("4684"),
+        annual_production=Decimal("212580"),
+        annual_production_unit="oz",
+        mine_life_years=Decimal("11"),
+        discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("32.0"),
+        npv_dfs=Decimal("405"),
+        reporting_currency="USD",
+        fx_rate=None,
+    )
+    result = revalue(inp)
+    assert abs(result.npv_spot - Decimal("4468")) < Decimal("5")
+    assert abs(result.npv_uplift - Decimal("4063")) < Decimal("5")
+
+
+def test_aud_reporting_zero_fx_raises():
+    inp = RevaluationInput(
+        commodity="Au", price_dfs_usd=Decimal("1900"),
+        price_spot_usd=Decimal("3500"),
+        annual_production=Decimal("180000"), annual_production_unit="oz",
+        mine_life_years=Decimal("10"), discount_rate_pct=Decimal("5"),
+        tax_rate_pct=Decimal("30"), npv_dfs=Decimal("985"),
+        reporting_currency="AUD", fx_rate=Decimal("0"),
+    )
+    with pytest.raises(RevaluationError, match="fx_rate_must_be_positive"):
+        revalue(inp)
 
 
 # ── Copper USD revaluation ────────────────────────────────────────
@@ -111,7 +169,7 @@ def test_unsupported_commodity_raises():
         tax_rate_pct=None,
         npv_dfs=Decimal("2000"),
         reporting_currency="AUD",
-        fx_rate=Decimal("1.55"),
+        fx_rate=Decimal("0.6452"),
     )
     with pytest.raises(RevaluationError, match="unsupported_commodity"):
         revalue(inp)

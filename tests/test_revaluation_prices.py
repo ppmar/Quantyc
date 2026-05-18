@@ -39,7 +39,9 @@ def in_memory_db():
 def test_fetch_yahoo_quote_gold(mock_get):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
-        "quoteResponse": {"result": [{"symbol": "GC=F", "regularMarketPrice": 3520.5}]}
+        "chart": {
+            "result": [{"meta": {"regularMarketPrice": 3520.5, "symbol": "GC=F"}}]
+        }
     }
     mock_resp.raise_for_status = MagicMock()
     mock_get.return_value = mock_resp
@@ -51,7 +53,7 @@ def test_fetch_yahoo_quote_gold(mock_get):
 @patch("revaluation.prices.requests.get")
 def test_fetch_yahoo_quote_empty_result_raises(mock_get):
     mock_resp = MagicMock()
-    mock_resp.json.return_value = {"quoteResponse": {"result": []}}
+    mock_resp.json.return_value = {"chart": {"result": []}}
     mock_resp.raise_for_status = MagicMock()
     mock_get.return_value = mock_resp
 
@@ -63,7 +65,7 @@ def test_fetch_yahoo_quote_empty_result_raises(mock_get):
 def test_fetch_yahoo_quote_no_price_raises(mock_get):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
-        "quoteResponse": {"result": [{"symbol": "GC=F"}]}
+        "chart": {"result": [{"meta": {"symbol": "GC=F"}}]}
     }
     mock_resp.raise_for_status = MagicMock()
     mock_get.return_value = mock_resp

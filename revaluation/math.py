@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-METHOD_VERSION = "first_order_v1"
+METHOD_VERSION = "first_order_v2"
 DEFAULT_TAX_RATE = Decimal("0.30")
 
 SUPPORTED_COMMODITIES = {"Au", "Cu"}
@@ -26,8 +26,9 @@ class RevaluationInput:
     tax_rate_pct: Optional[Decimal]  # None falls back to DEFAULT_TAX_RATE
     npv_dfs: Decimal                 # in reporting_currency millions
     reporting_currency: str          # 'AUD', 'USD', etc.
-    fx_rate: Optional[Decimal]       # rate to convert USD ΔNPV → reporting_currency
-                                     # for AUD reporting + USD prices: this is AUD per USD
+    fx_rate: Optional[Decimal]       # USD per 1 AUD, e.g. 0.6452 (Yahoo AUDUSD=X convention).
+                                     # Required when reporting_currency == "AUD". Used as:
+                                     # amount_aud = amount_usd / fx_rate
 
 
 @dataclass(frozen=True)
@@ -121,32 +122,24 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
     # Annuity factor
     a = annuity_factor(inp.discount_rate_pct, inp.mine_life_years)
 
-    # Compute delta_price in the study's reporting currency
-    # price_spot_usd is always USD. price_dfs_usd may be in reporting_currency.
+    # Both prices are USD per invariant I2/I3. Compute uplift in USD.
+    delta_price_usd = inp.price_spot_usd - inp.price_dfs_usd
+    delta_revenue_annual_usd = normalized_production * delta_price_usd
+    delta_npv_usd = delta_revenue_annual_usd * a * (Decimal("1") - tax_rate / Decimal("100"))
+    delta_npv_usd_millions = delta_npv_usd / Decimal("1000000")
+
+    # Convert to reporting currency per invariant I4.
     if inp.reporting_currency == "USD":
-        # Both prices in USD — direct comparison
-        delta_price = inp.price_spot_usd - inp.price_dfs_usd
-        fx_divisor = Decimal("1")
+        delta_npv_reporting_currency = delta_npv_usd_millions
     elif inp.reporting_currency == "AUD":
         if inp.fx_rate is None:
-            raise RevaluationError("fx_rate_required_for_aud_reporting_with_usd_prices")
-        # fx_rate is AUDUSD (e.g., 0.7225 means 1 AUD = 0.7225 USD)
-        # Convert spot USD to AUD: spot_aud = spot_usd / fx_rate
-        spot_in_aud = inp.price_spot_usd / inp.fx_rate
-        # DFS price is already in AUD for AUD-reporting studies
-        delta_price = spot_in_aud - inp.price_dfs_usd
-        fx_divisor = Decimal("1")  # already in AUD
+            raise RevaluationError("fx_rate_required_for_aud_reporting")
+        if inp.fx_rate <= 0:
+            raise RevaluationError(f"fx_rate_must_be_positive:{inp.fx_rate}")
+        # fx_rate = USD per AUD (~0.65). amount_aud = amount_usd / fx_rate.
+        delta_npv_reporting_currency = delta_npv_usd_millions / inp.fx_rate
     else:
         raise RevaluationError(f"unsupported_reporting_currency:{inp.reporting_currency}")
-
-    # Annual revenue uplift in reporting currency
-    delta_revenue_annual_usd = normalized_production * delta_price
-
-    # ΔNPV in reporting_currency millions
-    delta_npv = delta_revenue_annual_usd * a * (Decimal("1") - tax_rate / Decimal("100"))
-    delta_npv_millions = delta_npv / Decimal("1000000")
-
-    delta_npv_reporting_currency = delta_npv_millions
 
     npv_spot = inp.npv_dfs + delta_npv_reporting_currency
     npv_uplift = npv_spot - inp.npv_dfs

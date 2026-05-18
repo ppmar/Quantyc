@@ -147,29 +147,12 @@ def test_revalue_study_end_to_end_au(mock_yahoo, test_db):
     """Full pipeline: synthetic DFS -> mock spot -> revaluations row."""
     study_id = _insert_gold_dfs(test_db)
 
-    # Mock Yahoo: gold at 3520, AUD/USD at 1.55 (i.e., 1 USD = 1.55 AUD? No — AUDUSD=X returns AUD per USD)
-    # Actually AUDUSD=X returns how many USD per 1 AUD (e.g., 0.645)
-    # But the spec says fx_rate is AUD per USD, so we mock the inverse.
-    # The pipeline fetches "AUDUSD" commodity which maps to AUDUSD=X symbol.
-    # AUDUSD=X returns ~0.645 (AUD per USD would be 1/0.645 = 1.55)
-    # Wait — the SYMBOL_MAP says AUDUSD=X -> ("AUDUSD", "AUD/USD", ...)
-    # and the math layer expects fx_rate = AUD per USD for conversion.
-    # So if AUDUSD=X returns 0.645 (the market quote for AUD/USD),
-    # we need to invert it. But the current code doesn't invert.
-    # Let's check: the pipeline passes fx_rate directly from get_or_fetch_price.
-    # The spec says fx_rate convention is "AUD per USD" (> 1 typically).
-    # AUDUSD=X from Yahoo returns ~0.645 which is USD per 1 AUD.
-    # So we actually need 1/0.645 = 1.55 AUD per USD.
-    # But the current pipeline.py does NOT invert. This means either:
-    # (a) the test should mock with the inverted value, or
-    # (b) the pipeline needs fixing.
-    # The spec code shows fx_rate passed directly from get_or_fetch_price.
-    # For now, mock with 1.55 to match the hand-computed values.
+    # Yahoo AUDUSD=X returns USD per AUD (~0.6452). See invariant I4 in specs/spec_revaluation_aud_fx_fix.md.
     def mock_quote(symbol):
         if symbol == "GC=F":
             return Decimal("3520")
         elif symbol == "AUDUSD=X":
-            return Decimal("1.55")
+            return Decimal("0.6452")
         raise ValueError(f"unexpected symbol: {symbol}")
 
     mock_yahoo.side_effect = mock_quote
@@ -184,10 +167,16 @@ def test_revalue_study_end_to_end_au(mock_yahoo, test_db):
     assert row["commodity"] == "Au"
     assert row["price_dfs"] == 1900.0
     assert row["price_spot"] == 3520.0
-    assert row["method_version"] == "first_order_v1"
+    assert row["method_version"] == "first_order_v2"
     assert row["npv_spot"] > row["npv_dfs"]
     assert row["npv_uplift"] > 0
     assert row["npv_uplift_pct"] > 0
+    # Hand-checked: with spot=3520, fx=0.6452, NPV_DFS=985 AUD M
+    # ΔNPV_USD = 180,000 * (3520-1900) * 7.7217 * 0.70 / 1e6 = 1576.16 USD M
+    # ΔNPV_AUD = 1576.16 / 0.6452                              = 2443.00 AUD M
+    # NPV_spot = 985 + 2443.00                                 = 3428.00 AUD M
+    assert abs(row["npv_spot"] - 3428.00) < 1.0
+    assert abs(row["npv_uplift"] - 2443.00) < 1.0
 
 
 # ── Commodity skip ────────────────────────────────────────────────

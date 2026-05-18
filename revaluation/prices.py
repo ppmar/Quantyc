@@ -4,6 +4,13 @@ Yahoo Finance spot price fetcher for Au, Cu, and AUD/USD FX.
 Uses the unofficial query2.finance.yahoo.com endpoint via requests.
 No yfinance dependency — that library is heavyweight and we only need quotes.
 """
+# FX convention (invariant I4):
+#   The "AUDUSD" commodity is fetched via the Yahoo AUDUSD=X symbol.
+#   The returned scalar is "USD per 1 AUD" (typically ~0.65).
+#   To convert amount_usd -> amount_aud:  amount_usd / fx_rate
+#   To convert amount_aud -> amount_usd:  amount_aud * fx_rate
+#   This convention is enforced in revaluation/math.py.
+
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -18,7 +25,7 @@ logger = logging.getLogger(__name__)
 SYMBOL_MAP = {
     "GC=F":     ("Au", "USD/oz", Decimal("1")),
     "HG=F":     ("Cu", "USD/lb", Decimal("1")),
-    "AUDUSD=X": ("AUDUSD", "AUD/USD", Decimal("1")),
+    "AUDUSD=X": ("AUDUSD", "USD_per_AUD", Decimal("1")),
 }
 
 CACHE_TTL_HOURS = 1

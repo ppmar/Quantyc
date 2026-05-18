@@ -1,0 +1,464 @@
+# SPEC — `parsers/appendix_2a.py`
+
+**Target agent:** Claude Code
+**Repo:** `github.com/ppmar/Quantyc`
+**Module path:** `parsers/appendix_2a.py`
+**Status:** Ready for implementation
+**Estimated PRs:** 2 sequential (schemas + profile detection + Part 4.1 → Part 4.2 + reconciliation)
+**Companion docs:** `INGEST.md`, `SPEC_exploration_results_parser.md`, `SPEC_appendix_5b_parser.md`
+
+---
+
+## 0. Purpose & scope
+
+Extract the **post-issuance capital structure snapshot** from ASX Appendix 2A PDFs. The only part of the document that matters for valuation is **Part 4 — Issued capital following quotation** (always the last page). Everything before it (entity header, issuance event details, previous 3B reference, distribution schedule) is context that the parser deliberately ignores.
+
+**This parser produces exactly three things:**
+
+1. `shares_basic` — total quoted ordinary shares on issue after this application (from Part 4.1)
+2. `unquoted_instruments[]` — structured list of every option / convertible note / performance right (from Part 4.2) with face count, strike, expiry
+3. `shares_fd_naive` — `shares_basic + sum(unquoted_instruments.total_on_issue)` as a reconciled upper bound
+
+Nothing else. If the dashboard ever needs the issue price of the specific tranche or the previous 3B link, that is a separate parser or a direct ASX-API lookup — not this parser's job.
+
+---
+
+## 1. Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  /api/ingest  (existing — no changes)                        │
+│  fetches PDF bytes + announcement metadata from ASX API      │
+└────────────────────┬─────────────────────────────────────────┘
+                     │ bytes + ticker + doc_id + announcement_date
+                     ▼
+┌──────────────────────────────────────────────────────────────┐
+│  profile_detector.py  (existing — add new branch)            │
+│  → returns Profile.APPENDIX_2A if:                           │
+│     - first-page text matches                                │
+│       r"Appendix 2A\s*[-–]\s*Application for quotation"      │
+│     AND                                                      │
+│     - "Part 4 - Issued capital following quotation"          │
+│       appears somewhere in the document                      │
+└────────────────────┬─────────────────────────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────────────────────────┐
+│  appendix_2a.py  (NEW — this spec)                           │
+│  ├── _locate_part_4_text        (grab text from Part 4 only) │
+│  ├── _extract_quoted_classes    (Part 4.1)                   │
+│  ├── _extract_unquoted_list     (Part 4.2)                   │
+│  └── _validate_and_reconcile    (sanity checks)              │
+│                     │                                        │
+│                     ▼                                        │
+│  Appendix2ACapitalStructure dataclass  →  returned to caller │
+│                     │                                        │
+│                     ▼                                        │
+│  caller persists to SQLite (NOT the parser's job)            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+The parser receives raw PDF **bytes** (`io.BytesIO`) — not a path — per the stateless ingestion contract in `INGEST.md`. It never writes to disk. The `announcement_date` is supplied by the caller (the ASX API metadata already includes it — there is no reason to re-parse it from the PDF).
+
+---
+
+## 2. Inviolable rules
+
+> **These rules MUST NOT be violated. They are the contract between this parser and the rest of the pipeline.**
+
+1. **Only Part 4 is parsed.** Earlier pages are not read. The issuance event, previous 3B reference, and distribution schedule are explicitly out of scope.
+2. **Stateless.** No DB writes, no network calls, no filesystem writes, no caching across calls, no module-level mutable state.
+3. **No LLM.** Pure regex + `pdfplumber` text extraction. LLM fallback lives in a separate component, never here.
+4. **No OCR.** If `pdfplumber` returns empty text, raise `ExtractionError("scanned_pdf_no_text")` — do not attempt OCR.
+5. **Reconciliation is mandatory.** `shares_basic = sum(QuotedClass.total_on_issue)`. `shares_fd_naive = shares_basic + sum(UnquotedInstrument.total_on_issue)`. Both computed in the parser, never read from the PDF.
+6. **Fail loud.** Any uncertainty becomes a warning in `extraction_warnings` or an error that raises. Never silently default a numeric field to `0`.
+7. **No invented data.** Every numeric value must trace to a regex match on a specific line of Part 4 text. No interpolation, no inferred fields.
+8. **Idempotent.** Parsing the same bytes twice yields byte-identical payloads (modulo `parsed_at`).
+
+---
+
+## 3. Document profile detection
+
+Run **before** invoking this parser. Detection belongs in `profile_detector.py`, not here.
+
+| Profile | Detection pattern | Parser |
+|---|---|---|
+| `APPENDIX_2A` | `r"Appendix 2A\s*[-–]\s*Application for quotation of securities"` in first 2 pages **AND** `r"Part 4 - Issued capital following quotation"` anywhere in doc | this parser |
+
+If the first regex matches but the Part 4 marker is missing → raise `MalformedDocumentError("appendix_2a_missing_part4")`. Do **not** fall through.
+
+---
+
+## 4. Schemas
+
+### 4.1 Dataclasses (`parsers/appendix_2a_schemas.py`)
+
+```python
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Optional, Literal
+
+@dataclass(frozen=True)
+class QuotedClass:
+    """One row of Part 4.1 — a quoted security class (almost always ordinary shares)."""
+    asx_code: str                          # e.g. "HTG"
+    description: str                       # e.g. "ORDINARY FULLY PAID"
+    total_on_issue: int
+
+@dataclass(frozen=True)
+class UnquotedInstrument:
+    """One row of Part 4.2 — an unquoted option, convertible note, or performance right."""
+    asx_code: str                          # e.g. "HTGAU"
+    description: str                       # full raw description, verbatim
+    instrument_type: Literal["option", "convertible_note", "performance_right", "other"]
+    total_on_issue: int                    # face count
+    expiry_date: Optional[date]            # None for CNs, some perf rights
+    strike_aud: Optional[Decimal]          # None for CNs, perf rights
+    raw_line: str                          # original PDF line for audit
+
+@dataclass(frozen=True)
+class Appendix2ACapitalStructure:
+    # provenance
+    ticker: str
+    doc_id: str
+    snapshot_date: date                    # passed in by caller from ASX API metadata
+    parsed_at: datetime
+    parser_version: str                    # semver, bump on any schema change
+
+    # Part 4.1
+    quoted_classes: list[QuotedClass]
+
+    # Part 4.2
+    unquoted_instruments: list[UnquotedInstrument]
+
+    # derived totals (computed in parser, not pulled from doc)
+    shares_basic: int                       # = sum(QuotedClass.total_on_issue)
+    shares_fd_naive: int                    # = basic + sum(unquoted.total_on_issue)
+    options_outstanding: int                # sum where type == "option"
+    convertible_notes_face_count: int       # sum where type == "convertible_note"
+    performance_rights_count: int           # sum where type == "performance_right"
+
+    # diagnostics
+    extraction_warnings: list[str] = field(default_factory=list)
+```
+
+### 4.2 DB table additions (`db/migrations/NNNN_capital_structure.sql`)
+
+Two new tables. All INSERTs happen in the caller, not here.
+
+```sql
+CREATE TABLE IF NOT EXISTS capital_structure_snapshots (
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id                     TEXT NOT NULL REFERENCES documents(id),
+    ticker                     TEXT NOT NULL,
+    snapshot_date              DATE NOT NULL,
+    source_profile             TEXT NOT NULL,          -- "appendix_2a"
+    shares_basic               INTEGER NOT NULL,
+    shares_fd_naive            INTEGER NOT NULL,
+    options_outstanding        INTEGER NOT NULL,
+    convertible_notes_face     INTEGER NOT NULL,
+    performance_rights_count   INTEGER NOT NULL,
+    parser_version             TEXT NOT NULL,
+    parsed_at                  TIMESTAMP NOT NULL,
+    UNIQUE(doc_id)
+);
+
+CREATE TABLE IF NOT EXISTS unquoted_instruments (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id        INTEGER NOT NULL REFERENCES capital_structure_snapshots(id)
+                                           ON DELETE CASCADE,
+    asx_code           TEXT NOT NULL,
+    instrument_type    TEXT NOT NULL CHECK (instrument_type IN
+                         ('option','convertible_note','performance_right','other')),
+    description        TEXT NOT NULL,
+    total_on_issue     INTEGER NOT NULL,
+    expiry_date        DATE,
+    strike_aud         NUMERIC
+);
+
+CREATE INDEX IF NOT EXISTS idx_css_ticker_date
+    ON capital_structure_snapshots(ticker, snapshot_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ui_snapshot
+    ON unquoted_instruments(snapshot_id);
+```
+
+> **UI contract (frontend, informational):** The dashboard displays `shares_basic` and `shares_fd_naive` per ticker. The individual unquoted instruments are stored but **not rendered in the main table** — they are available via a "Capital structure detail" drill-down only. This matches the requirement: *"pas display les unquoted, somme unquoted et quoted"*.
+
+---
+
+## 5. Extraction logic
+
+### 5.1 Locate Part 4 text
+
+Iterate `pdfplumber` pages and concatenate the text of every page where `"Part 4 - Issued capital following quotation"` appears, plus any subsequent pages until EOF. In practice this is always the last page, but the parser must not assume a fixed page index — some issuers spill into a 7th page when they have many unquoted classes.
+
+Return the concatenated text. Strip the running footer (`"Appendix 2A - Application for quotation of securities"` and `"N / M"` pagination) with a regex pass before handing it to the section extractors.
+
+If no page contains the Part 4 marker → raise `MalformedDocumentError("appendix_2a_missing_part4")`.
+
+### 5.2 Quoted securities (Part 4.1)
+
+Target: one `QuotedClass` per row of the Part 4.1 table.
+
+Strategy: regex on the text block between `"4.1 Quoted +securities"` and `"4.2 Unquoted +securities"`.
+
+```python
+QUOTED_ROW_RE = (
+    r"^(?P<code>[A-Z0-9]{2,6})\s*:\s*(?P<desc>[A-Z][A-Z0-9 .\-/()]+?)\s+"
+    r"(?P<n>[\d,]+)\s*$"
+)
+```
+
+Iterate line by line; skip blank lines and header rows (`"ASX +security code"`, `"Total number of"`, `"+securities on issue"`). For the HTG fixture this yields exactly one row:
+
+```
+HTG : ORDINARY FULLY PAID   1,204,377,219
+```
+
+**Reconciliation:** `shares_basic = sum(q.total_on_issue for q in quoted_classes)`. For single-class issuers this is trivially the dominant ordinary line. For dual-class issuers, sum them.
+
+If `len(quoted_classes) == 0` → raise `ReconciliationError("no_quoted_classes_parsed")`. This means either the PDF layout changed or the regex is broken — both need human attention.
+
+### 5.3 Unquoted securities (Part 4.2)
+
+This is where the parser earns its keep. Part 4.2 is a flat list of one row per instrument class. Across the ASX Appendix 2A corpus the format is highly consistent. Three shapes to handle:
+
+**Shape A — Option with expiry and strike:**
+```
+HTGAU : OPTION EXPIRING 07-OCT-2028 EX $0.03   1,500,000
+```
+
+**Shape B — Convertible notes (no expiry, no strike shown in Part 4.2):**
+```
+HTGAG : CONVERTIBLE NOTES   6,275,671
+```
+
+**Shape C — Performance rights (forward-compat — HTG fixture does not contain any):**
+```
+XYZAB : PERFORMANCE RIGHTS EXPIRING 30-JUN-2027   500,000
+```
+
+Regex battery (apply in order, first match wins):
+
+```python
+OPT_RE = (
+    r"^(?P<code>[A-Z0-9]{3,8})\s*:\s*"
+    r"OPTION\s+EXPIRING\s+(?P<expiry>\d{2}-[A-Z]{3}-\d{4})\s+"
+    r"EX\s+\$(?P<strike>[\d]+\.[\d]+)\s+"
+    r"(?P<n>[\d,]+)\s*$"
+)
+
+CN_RE = (
+    r"^(?P<code>[A-Z0-9]{3,8})\s*:\s*"
+    r"CONVERTIBLE\s+NOTES?\s+"
+    r"(?P<n>[\d,]+)\s*$"
+)
+
+PERF_RE = (
+    r"^(?P<code>[A-Z0-9]{3,8})\s*:\s*"
+    r"PERFORMANCE\s+RIGHTS?"
+    r"(?:\s+EXPIRING\s+(?P<expiry>\d{2}-[A-Z]{3}-\d{4}))?\s+"
+    r"(?P<n>[\d,]+)\s*$"
+)
+```
+
+Any line between the `"4.2"` header and EOF that starts with `[A-Z0-9]{3,8}\s*:` but matches **none** of the three → append with `instrument_type="other"`, `strike_aud=None`, `expiry_date=None`, and add warning `"unquoted_row_unparsed: {raw_line}"`. **Never drop silently.**
+
+**Date parsing:** `"07-OCT-2028"` → `date(2028, 10, 7)`. Use a month-abbreviation lookup. Unknown month → warning + `expiry_date=None`, keep the row.
+
+**Strike parsing:** `"$0.03"` → `Decimal("0.03")`. Preserve exact precision as written (do not normalize `"0.030"` to `"0.03"`).
+
+### 5.4 Validation
+
+After both extractors run:
+
+1. `shares_basic == sum(quoted)` — always true by construction, assert anyway.
+2. `shares_fd_naive == shares_basic + sum(unquoted)` — by construction.
+3. Instrument type counts sum to total unquoted count (invariant check).
+4. If the Part 4.2 text block is non-empty but no unquoted rows parsed → warning `"unquoted_section_present_but_no_rows_parsed"`. This is usually a regex miss.
+
+None of the above raise; they populate `extraction_warnings`. Only the following raise:
+
+| Error code | Condition |
+|---|---|
+| `ExtractionError("scanned_pdf_no_text")` | `pdfplumber` returns empty text for all pages |
+| `MalformedDocumentError("appendix_2a_missing_part4")` | Profile matched but Part 4 marker missing |
+| `ReconciliationError("no_quoted_classes_parsed")` | `shares_basic == 0` (parser broken) |
+
+---
+
+## 6. Test fixtures
+
+Store fixtures in `tests/fixtures/appendix_2a/` as raw PDF bytes.
+
+### 6.1 Fixture 1 — HTG 2026-04-20 (primary)
+
+File: `HTG_appendix_2a_2026-04-20.pdf`
+
+Expected top-level values:
+
+```python
+EXPECTED_HTG = {
+    "ticker": "HTG",
+    "snapshot_date": date(2026, 4, 20),
+
+    "quoted_classes_count": 1,
+    "shares_basic": 1_204_377_219,
+
+    "unquoted_count": 9,
+    "options_outstanding": 157_426_119,
+    "convertible_notes_face_count": 6_275_671,
+    "performance_rights_count": 0,
+    "shares_fd_naive": 1_368_079_009,     # 1_204_377_219 + 163_701_790
+
+    "warnings_max": 0,
+}
+```
+
+### 6.2 Per-instrument expectations
+
+```python
+EXPECTED_HTG_QUOTED = [
+    # (code, description,            total)
+    ("HTG", "ORDINARY FULLY PAID", 1_204_377_219),
+]
+
+EXPECTED_HTG_UNQUOTED = [
+    # (code,   type,               total,     expiry,             strike)
+    ("HTGAU", "option",            1_500_000, date(2028,10, 7), Decimal("0.03")),
+    ("HTGAT", "option",           18_506_790, date(2028, 3,29), Decimal("0.0377")),
+    ("HTGAV", "option",            1_000_000, date(2028,12,19), Decimal("0.03")),
+    ("HTGAA", "option",           58_947_247, date(2027, 4,26), Decimal("0.03")),
+    ("HTGAG", "convertible_note",  6_275_671, None,               None),
+    ("HTGAR", "option",            5_000_000, date(2026, 6,30), Decimal("0.075")),
+    ("HTGAD", "option",           17_824_676, date(2028, 5,19), Decimal("0.0261")),
+    ("HTGAS", "option",           32_647_406, date(2027, 9,24), Decimal("0.03")),
+    ("HTGAC", "option",           22_000_000, date(2028, 1,22), Decimal("0.02")),
+]
+```
+
+Arithmetic check: options total = `1_500_000 + 18_506_790 + 1_000_000 + 58_947_247 + 5_000_000 + 17_824_676 + 32_647_406 + 22_000_000 = 157_426_119`. All unquoted = `157_426_119 + 6_275_671 = 163_701_790`. FD naive = `1_204_377_219 + 163_701_790 = 1_368_079_009`.
+
+### 6.3 Test cases (pytest)
+
+Minimum 9 tests. Each must fail if the parser regresses.
+
+| # | Test name | Asserts |
+|---|---|---|
+| 1 | `test_profile_detection_htg` | `detect_profile(bytes)` returns `Profile.APPENDIX_2A` |
+| 2 | `test_quoted_classes_htg` | `len(quoted_classes) == 1` and content matches `EXPECTED_HTG_QUOTED` exactly |
+| 3 | `test_shares_basic_htg` | `shares_basic == 1_204_377_219` |
+| 4 | `test_unquoted_count_htg` | `len(unquoted_instruments) == 9` |
+| 5 | `test_unquoted_exact_match_htg` | Every row in `EXPECTED_HTG_UNQUOTED` matches exactly (code, type, count, expiry, strike) |
+| 6 | `test_options_outstanding_htg` | `options_outstanding == 157_426_119`, `convertible_notes_face_count == 6_275_671` |
+| 7 | `test_shares_fd_naive_htg` | `shares_fd_naive == 1_368_079_009` |
+| 8 | `test_no_warnings_htg` | `len(extraction_warnings) == 0` |
+| 9 | `test_idempotent_htg` | Parsing the same bytes twice yields equal payloads (modulo `parsed_at`) |
+
+### 6.4 Failure-mode tests (synthetic fixtures)
+
+| # | Test name | Fixture | Asserts |
+|---|---|---|---|
+| 10 | `test_scanned_pdf_raises` | Scanned rasterized PDF | raises `ExtractionError("scanned_pdf_no_text")` |
+| 11 | `test_missing_part_4_raises` | Truncated PDF without Part 4 | raises `MalformedDocumentError` |
+| 12 | `test_unknown_unquoted_shape_warns` | Synthetic PDF with `XYZAA : WIDGET 100,000` | captures row as `other` with warning, does not raise |
+
+Tests 10–12 use small synthetic PDFs generated via `reportlab` in a fixture-setup script.
+
+---
+
+## 7. Parser public API
+
+```python
+# parsers/appendix_2a.py
+
+from io import BytesIO
+from datetime import date, datetime
+from .appendix_2a_schemas import Appendix2ACapitalStructure
+
+PARSER_VERSION = "0.1.0"
+
+def parse(
+    pdf_bytes: BytesIO,
+    ticker: str,
+    doc_id: str,
+    announcement_date: date,
+) -> Appendix2ACapitalStructure:
+    """
+    Parse an ASX Appendix 2A PDF and return the post-issuance capital structure.
+
+    Only Part 4 of the document is parsed. Issuance event, previous 3B reference,
+    and distribution schedule are explicitly ignored.
+
+    Args:
+        pdf_bytes:         raw PDF bytes from the ingestion layer
+        ticker:            issuer ticker (e.g. "HTG")
+        doc_id:            Quantyc document ID for provenance
+        announcement_date: from ASX API metadata — used as snapshot_date
+
+    Returns:
+        Appendix2ACapitalStructure — fully-validated, reconciled dataclass.
+
+    Raises:
+        ExtractionError:         scanned PDF / empty text
+        MalformedDocumentError:  profile matched but Part 4 missing
+        ReconciliationError:     no quoted classes parsed (parser bug or corrupt doc)
+    """
+    ...
+```
+
+No other public symbols. Helper extractors are prefixed with `_` and not exported.
+
+---
+
+## 8. Out of scope (explicit non-goals)
+
+This parser deliberately does **not**:
+
+1. Read any page before Part 4. The entity header, issuance event, previous 3B reference, and distribution schedule are ignored.
+2. Extract `issue_price_aud_per_security` for the tranche being quoted. If needed later, that's a separate 2A extractor or a direct ASX-API lookup.
+3. Compute `shares_fd_fully_dilutive` accounting for real CN conversion terms. Those live in the underlying Appendix 3B; `shares_fd_naive` is the honest upper bound.
+4. Handle Appendix 3G (unquoted notifications) or Appendix 3B (proposed issues). Separate specs, shared infrastructure in a future refactor once this parser is stable.
+5. Classify the issuance (placement vs. SPP vs. scrip vs. exercise). Not this parser's concern.
+6. Detect KMP / insider participation. Handled by a sibling parser targeting Appendix 3G.
+7. Compute dilution %, overhang metrics, or market cap. Those are analytics, not extraction.
+8. Retry failed extractions or fall back to other parsers. Profile detection is the gate; if this parser is called, the profile has already been confirmed.
+
+---
+
+## 9. PR sequencing
+
+Implement in two reviewable PRs. Do **not** merge them as one.
+
+**PR 1 — Schemas, profile detection, Part 4.1 (quoted classes)**
+- `parsers/appendix_2a_schemas.py` (all dataclasses)
+- `profile_detector.py`: add `APPENDIX_2A` branch with tests
+- `parsers/appendix_2a.py`: stub `parse()`, implement `_locate_part_4_text`, `_extract_quoted_classes`
+- Tests 1, 2, 3 passing
+
+**PR 2 — Part 4.2 (unquoted list), reconciliation, DB migration, wiring**
+- `_extract_unquoted_list` with all three regex shapes
+- `_validate_and_reconcile`
+- DB migration `NNNN_capital_structure.sql` for `capital_structure_snapshots` + `unquoted_instruments`
+- Caller wiring in the ingest dispatcher
+- Tests 4–12 passing
+
+Each PR must leave the main branch green. PR 2 is the only one that touches the DB schema — keep the migration isolated.
+
+---
+
+## 10. Definition of done
+
+- [ ] All 12 tests pass
+- [ ] HTG fixture parses with zero `extraction_warnings`
+- [ ] `parse(bytes, ticker, doc_id, announcement_date)` runs in under 1 second on the HTG fixture
+- [ ] `mypy --strict parsers/appendix_2a.py parsers/appendix_2a_schemas.py` passes
+- [ ] `ruff check parsers/appendix_2a*.py` passes
+- [ ] DB migration applied on a fresh SQLite and rolled back cleanly
+- [ ] Caller wiring: ingestion pipeline dispatches `APPENDIX_2A` profile to this parser and persists the result
+- [ ] `parsers/appendix_2a.README.md` documents the public API, fixtures, and known limitations
+- [ ] One additional ticker (non-HTG, non-SXG) manually tested end-to-end as a smoke check — add as fixture #2 if anything breaks
+
+Once stable, this parser is reusable across the entire ASX junior universe without modification. At that point, generalize to Appendix 3G and Appendix 3B in a follow-up spec that extracts the shared Part 4 logic into a `capital_structure/` package.

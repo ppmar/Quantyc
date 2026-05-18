@@ -32,7 +32,7 @@ HEADLINE_KEYWORDS: list[tuple[str, list[str]]] = [
         "dfs completed", "updated dfs", "revised dfs", "optimised dfs",
         "final feasibility study", "ffs results",
         "bankable feasibility study", "bfs results",
-        "feasibility update", "feasibility study results",
+        "feasibility update",
         "dfs",
     ]),
     ("study_pfs", [
@@ -100,6 +100,11 @@ FIRST_PAGE_KEYWORDS: list[tuple[str, list[str]]] = [
 ]
 
 
+_GENERIC_FEASIBILITY_RE = re.compile(
+    r"(?<![Pp]re[- ])(?<![Pp]re)feasibility\s+study", re.IGNORECASE
+)
+
+
 def classify_headline(headline: str) -> str | None:
     """Classify from headline text. Returns doc_type or None."""
     h = headline.lower().strip()
@@ -107,6 +112,9 @@ def classify_headline(headline: str) -> str | None:
         for kw in keywords:
             if kw in h:
                 return doc_type
+    # Catch generic "Feasibility Study" that isn't pre-feasibility or scoping
+    if _GENERIC_FEASIBILITY_RE.search(headline) and "scoping" not in h:
+        return "study_dfs"
     return None
 
 

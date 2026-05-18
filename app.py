@@ -43,6 +43,17 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key-change-in-prod"
 
 init_db()
 
+# Apply migrations
+_migrations_dir = Path(__file__).resolve().parent / "db" / "migrations"
+if _migrations_dir.exists():
+    _mig_conn = get_connection()
+    for _m in sorted(_migrations_dir.glob("*.sql")):
+        try:
+            _mig_conn.executescript(_m.read_text())
+        except Exception:
+            pass
+    _mig_conn.close()
+
 # Register blueprints
 from api.upload import bp as upload_bp
 from api.documents import bp as documents_bp
@@ -74,7 +85,7 @@ def api_ingest():
     """
     data = request.get_json(silent=True) or {}
     tickers = data.get("tickers", [])
-    count = data.get("count", 50)
+    count = data.get("count", 1000)
 
     if not tickers:
         from pathlib import Path

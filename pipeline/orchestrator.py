@@ -236,6 +236,19 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
                 (project_id, result.primary_commodity),
             )
 
+        # Dedup: skip if same project already has a study with same stage and NPV
+        study_date_str = result.effective_date.isoformat() if result.effective_date else None
+        npv_val = float(result.post_tax_npv_millions) if result.post_tax_npv_millions else None
+        existing_study = conn.execute(
+            """SELECT study_id FROM studies
+               WHERE project_id = ? AND study_stage = ? AND post_tax_npv = ?""",
+            (project_id, result.study_type, npv_val),
+        ).fetchone()
+        if existing_study:
+            logger.info("Skipping duplicate study for %s — %s (stage=%s, npv=%s) already exists as study #%d",
+                        ticker, result.project_name, result.study_type, npv_val, existing_study["study_id"])
+            return existing_study["study_id"]
+
         cur = conn.execute("""
             INSERT INTO studies (
                 project_id, document_id, study_stage, study_date,

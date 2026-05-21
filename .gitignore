@@ -6,6 +6,7 @@ db/_documents_backup.json
 specs/
 CLAUDE.md
 AGENTS.md
+claude_git.md
 frontend/CLAUDE.md
 frontend/AGENTS.md
 __pycache__/

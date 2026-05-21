@@ -195,7 +195,8 @@ CREATE TABLE IF NOT EXISTS studies (
     study_id       INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id     INTEGER NOT NULL REFERENCES projects(project_id),
     document_id    INTEGER REFERENCES documents(document_id),
-    study_stage    TEXT,                           -- scoping|PFS|DFS
+    study_stage    TEXT,                           -- DFS|Updated DFS|PFS|Scoping|PEA|...
+    study_confidence_tier TEXT,                    -- definitive|indicative|conceptual
     study_date     TEXT,
     mine_life_years REAL,
     annual_production REAL,

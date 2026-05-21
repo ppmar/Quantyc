@@ -21,20 +21,119 @@ function fmtContained(val: number | null, unit: string | null) {
   return `${val.toFixed(0)} ${unit ?? ""}`.trim();
 }
 
+// ─── Presentation helpers ──────────────────────────────────────
+
+const METHOD_VERSION_LABELS: Record<string, string> = {
+  first_order_v1: "Price sensitivity \u00b7 1st order",
+  first_order_v2: "Price sensitivity \u00b7 1st order",
+};
+
+function fmtMethodVersion(raw: string | null | undefined): string {
+  if (!raw) return "";
+  return METHOD_VERSION_LABELS[raw] ?? "Modelled";
+}
+
+const SPOT_SOURCE_LABELS: Record<string, string> = {
+  "yahoo:GC=F": "Gold spot (Yahoo)",
+  "yahoo:HG=F": "Copper spot (Yahoo)",
+  "yahoo:AUDUSD=X": "AUD/USD (Yahoo)",
+};
+
+function fmtSpotSource(raw: string | null | undefined): string {
+  if (!raw) return "";
+  return SPOT_SOURCE_LABELS[raw] ?? raw;
+}
+
+function fmtPriceForCommodity(price: number, commodity: string): string {
+  const digits = commodity === "Cu" ? 2 : 0;
+  return price.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function fmtPerUnitUSD(val: number | null, unit: string | null): string {
+  if (val == null) return "—";
+  const denom = (unit ?? "").replace(/^USD\s*\/\s*/i, "/");
+  const digits = Math.abs(val) >= 100 ? 0 : 2;
+  return `US$${val.toFixed(digits)}${denom}`;
+}
+
+// Single-accent palette per U2.
 function stageBadge(stage: string | null) {
   if (!stage) return null;
-  const colors: Record<string, string> = {
-    concept: "text-zinc-500 border-zinc-700",
-    exploration: "text-zinc-500 border-zinc-700",
-    discovery: "text-amber-400 border-amber-800",
-    feasibility: "text-sky-400 border-sky-800",
-    development: "text-violet-400 border-violet-800",
-    production: "text-emerald-400 border-emerald-800",
+  const s = stage.toLowerCase();
+
+  const STYLES: Record<string, string> = {
+    production:            "text-amber-300 bg-amber-500/10 border-amber-700/40",
+    development:           "text-amber-400/90 border-amber-800/60",
+    feasibility:           "text-amber-400/90 border-amber-800/60",
+    advanced_exploration:  "text-zinc-300 border-zinc-700",
+    discovery:             "text-zinc-300 border-zinc-700",
+    exploration:           "text-zinc-400 border-zinc-700",
+    concept:               "text-zinc-500 border-zinc-800",
+    care_and_maintenance:  "text-zinc-500 border-zinc-800",
   };
-  const cls = colors[stage.toLowerCase()] ?? "text-zinc-400 border-zinc-700";
+  const cls = STYLES[s] ?? "text-zinc-400 border-zinc-700";
+  const label = stage.replace(/_/g, " ");
+
   return (
     <span className={`text-[10px] uppercase tracking-wider border px-1.5 py-0.5 rounded ${cls}`}>
-      {stage}
+      {label}
+    </span>
+  );
+}
+
+// ─── DFS vintage signal ────────────────────────────────────────
+
+function computeStudyVintage(isoDate: string | null): { years: number; tier: "fresh" | "aging" | "stale" } | null {
+  if (!isoDate) return null;
+  const d = new Date(isoDate);
+  if (isNaN(d.getTime())) return null;
+  const years = (Date.now() - d.getTime()) / (365.25 * 24 * 3600 * 1000);
+  let tier: "fresh" | "aging" | "stale";
+  if (years < 3) tier = "fresh";
+  else if (years < 5) tier = "aging";
+  else tier = "stale";
+  return { years, tier };
+}
+
+function StudyVintageBadge({ isoDate }: { isoDate: string | null }) {
+  const v = computeStudyVintage(isoDate);
+  if (!v) return null;
+  const yrs = v.years.toFixed(0);
+
+  if (v.tier === "fresh") {
+    return <span className="text-[10px] text-zinc-600">&middot; {yrs}y old</span>;
+  }
+  if (v.tier === "aging") {
+    return <span className="text-[10px] text-zinc-500">&middot; {yrs}y old</span>;
+  }
+  return (
+    <span
+      className="text-[10px] text-amber-400/80 border border-amber-900/60 rounded px-1.5 py-0.5"
+      title="Study is ≥ 5 years old. Cost and capex assumptions are likely stale; a restudy may materially change the economics."
+    >
+      {yrs}y old &middot; restudy likely
+    </span>
+  );
+}
+
+// ─── Methodology hint ──────────────────────────────────────────
+
+function MethodologyHint() {
+  return (
+    <span
+      className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-zinc-700 text-zinc-500 text-[9px] leading-none cursor-help hover:text-zinc-300 hover:border-zinc-500 transition-colors"
+      title={
+        "First-order price sensitivity:\n" +
+        "  ΔNPV ≈ (P_spot − P_DFS) × annual production × annuity factor × (1 − tax)\n" +
+        "Holds constant: AISC, capex, royalties, recovery, mine life, production schedule.\n" +
+        "Not a full DCF re-model. Aged DFS publications and price ratios > 2× erode confidence."
+      }
+      aria-label="Methodology explanation"
+    >
+      i
     </span>
   );
 }
@@ -42,7 +141,6 @@ function stageBadge(stage: string | null) {
 const TOTAL_CATS = new Set(["Total", "Sub-total", "In-situ Total", "Stockpiles"]);
 
 function splitBySections(resources: ResourceRow[], projectName: string) {
-  // Group rows by section, keeping unsectioned rows as a separate "Total" group
   const sections: { label: string; rows: ResourceRow[] }[] = [];
   const unsectioned: ResourceRow[] = [];
   const sectionMap = new Map<string, ResourceRow[]>();
@@ -60,12 +158,10 @@ function splitBySections(resources: ResourceRow[], projectName: string) {
     }
   }
 
-  // If no sections detected, return all rows as one group
   if (sections.length === 0) {
     return [{ label: projectName, rows: resources }];
   }
 
-  // Add unsectioned rows (In-situ Total, Stockpiles, Total) as a summary group
   if (unsectioned.length > 0) {
     sections.push({ label: `${projectName} — Total`, rows: unsectioned });
   }
@@ -93,7 +189,7 @@ function SectionTable({ label, rows }: { label: string; rows: ResourceRow[] }) {
               const textCls = isTotal ? "text-zinc-200 font-medium" : "text-zinc-400";
               const valCls = isTotal ? "text-zinc-200 font-medium" : "text-zinc-300";
               return (
-                <tr key={i} className={`hover:bg-white/[0.02] ${isTotal ? "border-t border-white/[0.06]" : ""}`}>
+                <tr key={i} className={`${isTotal ? "border-t border-white/[0.06]" : ""}`}>
                   <td className={`px-3 py-1.5 text-xs ${textCls}`}>{r.category}</td>
                   <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtTonnes(r.tonnes_mt)}</td>
                   <td className={`px-3 py-1.5 text-xs ${valCls} text-right`}>{fmtGrade(r.grade, r.grade_unit)}</td>
@@ -137,17 +233,18 @@ function fmtPct(val: number | null) {
   return `${val.toFixed(1)}%`;
 }
 
-function StudyCard({ study }: { study: StudyData }) {
+function StudyCard({ study, suppressCommodities }: { study: StudyData; suppressCommodities?: Set<string> }) {
   const ccy = study.reporting_currency;
   const dr = study.discount_rate_pct != null ? study.discount_rate_pct.toFixed(0) : "?";
 
   return (
     <div className="mt-4">
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
         <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">{study.study_type}</h4>
         {study.study_date && (
           <span className="text-[10px] text-zinc-600">{study.study_date}</span>
         )}
+        <StudyVintageBadge isoDate={study.study_date_iso ?? null} />
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -178,7 +275,7 @@ function StudyCard({ study }: { study: StudyData }) {
         {study.aisc_per_unit != null && (
           <div>
             <p className="text-[10px] text-zinc-500 uppercase tracking-wider">AISC</p>
-            <p className="text-sm text-zinc-200 font-medium">{study.aisc_per_unit.toFixed(0)} {study.aisc_unit ?? ""}</p>
+            <p className="text-sm text-zinc-200 font-medium">{fmtPerUnitUSD(study.aisc_per_unit, study.aisc_unit)}</p>
           </div>
         )}
         {study.mine_life_years != null && (
@@ -203,11 +300,13 @@ function StudyCard({ study }: { study: StudyData }) {
 
       {study.price_assumptions && study.price_assumptions.length > 0 && (
         <div className="mt-3 flex gap-3 flex-wrap">
-          {study.price_assumptions.map((pa, i) => (
-            <span key={i} className="text-[10px] text-zinc-500 border border-white/[0.06] rounded px-1.5 py-0.5">
-              {pa.commodity} @ {pa.price.toLocaleString()} {pa.unit}
-            </span>
-          ))}
+          {study.price_assumptions
+            .filter((pa) => !suppressCommodities?.has(pa.commodity))
+            .map((pa, i) => (
+              <span key={i} className="text-[10px] text-zinc-500 border border-white/[0.06] rounded px-1.5 py-0.5">
+                {pa.commodity} @ {pa.price.toLocaleString()} {pa.unit}
+              </span>
+            ))}
         </div>
       )}
     </div>
@@ -244,9 +343,12 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
   return (
     <div className={`mt-4 border rounded-lg p-4 ${signalBorderColor(upliftPct)} bg-white/[0.02]`}>
       <div className="flex items-center justify-between mb-3">
-        <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
-          Spot revaluation
-        </h4>
+        <div className="flex items-center gap-1.5">
+          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+            Spot revaluation
+          </h4>
+          <MethodologyHint />
+        </div>
         <span className={`text-lg font-semibold tabular-nums ${signalColor(upliftPct)}`}>
           {upliftPct >= 0 ? "+" : ""}{(upliftPct * 100).toFixed(0)}%
         </span>
@@ -257,13 +359,13 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
         <div>
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">DFS assumed</p>
           <p className="text-sm text-zinc-400 tabular-nums">
-            {reval.price_dfs.toLocaleString(undefined, { minimumFractionDigits: reval.commodity === "Cu" ? 2 : 0 })} {reval.price_unit}
+            {fmtPriceForCommodity(reval.price_dfs, reval.commodity)} {reval.price_unit}
           </p>
         </div>
         <div>
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Spot price</p>
           <p className="text-sm text-zinc-200 font-medium tabular-nums">
-            {reval.price_spot.toLocaleString(undefined, { minimumFractionDigits: reval.commodity === "Cu" ? 2 : 0 })} {reval.price_unit}
+            {fmtPriceForCommodity(reval.price_spot, reval.commodity)} {reval.price_unit}
             <span className={`ml-1.5 text-xs ${priceChangePct >= 0 ? "text-emerald-500" : "text-red-400"}`}>
               {priceChangePct >= 0 ? "+" : ""}{priceChangePct.toFixed(0)}%
             </span>
@@ -271,7 +373,7 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
         </div>
       </div>
 
-      {/* NPV comparison — the main signal */}
+      {/* NPV comparison */}
       <div className="grid grid-cols-3 gap-3 py-3 border-t border-white/[0.06]">
         <div>
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV (DFS)</p>
@@ -312,7 +414,7 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
 
       {/* Provenance */}
       <p className="text-[10px] text-zinc-700 mt-2">
-        {reval.spot_source} · {spotDate} · {reval.method_version}
+        {fmtSpotSource(reval.spot_source)} &middot; {spotDate} &middot; {fmtMethodVersion(reval.method_version)}
       </p>
     </div>
   );
@@ -342,7 +444,16 @@ export function OperationsTab({ projects }: { projects: ProjectData[] }) {
               .join(" · ")}
           </p>
 
-          {project.study && <StudyCard study={project.study} />}
+          {project.study && (
+            <StudyCard
+              study={project.study}
+              suppressCommodities={
+                project.revaluation
+                  ? new Set([project.revaluation.commodity])
+                  : undefined
+              }
+            />
+          )}
 
           {project.revaluation && <RevaluationCard reval={project.revaluation} />}
 

@@ -131,6 +131,47 @@ def _translate_doc_type(doc_type: str | None) -> str:
     return _DOC_TYPE_LABELS.get(doc_type, "Announcement")
 
 
+# ── Operations completeness score ────────────────────────────────────────
+
+_COMPLETENESS_WEIGHTS = {
+    "has_resources":         0.20,
+    "has_primary_commodity": 0.05,
+    "stage_is_advanced":     0.10,
+    "has_study":             0.20,
+    "study_has_production":  0.15,
+    "study_has_npv":         0.15,
+    "has_revaluation":       0.15,
+}
+_ADVANCED_STAGES = {"feasibility", "development", "production"}
+_TAB_VISIBILITY_THRESHOLD = 0.40
+
+
+def _compute_project_completeness(
+    resources_count: int,
+    primary_commodity: str | None,
+    stage: str | None,
+    study_row,
+    has_revaluation: bool,
+) -> float:
+    """Return a 0.0-1.0 completeness score for an Operations card."""
+    score = 0.0
+    if resources_count > 0:
+        score += _COMPLETENESS_WEIGHTS["has_resources"]
+    if primary_commodity:
+        score += _COMPLETENESS_WEIGHTS["has_primary_commodity"]
+    if stage and stage.lower() in _ADVANCED_STAGES:
+        score += _COMPLETENESS_WEIGHTS["stage_is_advanced"]
+    if study_row is not None:
+        score += _COMPLETENESS_WEIGHTS["has_study"]
+        if study_row["mine_life_years"] is not None and study_row["annual_production"] is not None:
+            score += _COMPLETENESS_WEIGHTS["study_has_production"]
+        if study_row["post_tax_npv"] is not None:
+            score += _COMPLETENESS_WEIGHTS["study_has_npv"]
+    if has_revaluation:
+        score += _COMPLETENESS_WEIGHTS["has_revaluation"]
+    return round(score, 2)
+
+
 # ── Main endpoint ────────────────────────────────────────────────────────
 
 @bp.route("/api/company/<ticker>/snapshot")
@@ -373,7 +414,7 @@ def api_company_snapshot(ticker: str):
 
         # Latest study
         study_row = conn.execute(
-            """SELECT study_stage, study_date, mine_life_years, annual_production,
+            """SELECT study_stage, study_confidence_tier, study_date, mine_life_years, annual_production,
                       recovery_pct, initial_capex, sustaining_capex, opex,
                       post_tax_npv, pre_tax_npv, irr_pct, payback_years,
                       aisc_per_unit, aisc_unit, assumed_price_deck, assumed_fx,
@@ -394,7 +435,9 @@ def api_company_snapshot(ticker: str):
                     pass
             study_out = {
                 "study_type": study_row["study_stage"],
+                "study_confidence_tier": study_row["study_confidence_tier"],
                 "study_date": _fmt_date_display(study_row["study_date"]),
+                "study_date_iso": study_row["study_date"],
                 "reporting_currency": study_row["reporting_currency"],
                 "discount_rate_pct": study_row["discount_rate_pct"],
                 "post_tax_npv": study_row["post_tax_npv"],
@@ -424,6 +467,7 @@ def api_company_snapshot(ticker: str):
                           r.annuity_factor, r.npv_dfs, r.npv_spot,
                           r.npv_uplift, r.npv_uplift_pct,
                           r.method_version, r.warnings, r.computed_at,
+                          r.study_confidence_tier,
                           cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
                           s.reporting_currency
                    FROM revaluations r
@@ -463,6 +507,7 @@ def api_company_snapshot(ticker: str):
                     "spot_source": reval_row["spot_source"],
                     "spot_fetched_at": reval_row["spot_fetched_at"],
                     "warnings": warnings,
+                    "study_confidence_tier": reval_row["study_confidence_tier"],
                 }
         except Exception:
             pass  # revaluations table may not exist on older DBs
@@ -472,6 +517,14 @@ def api_company_snapshot(ticker: str):
             source = proj["source"]
         except (IndexError, KeyError):
             source = None
+
+        completeness = _compute_project_completeness(
+            resources_count=len(resources_out),
+            primary_commodity=primary_commodity,
+            stage=proj["stage"],
+            study_row=study_row,
+            has_revaluation=reval_out is not None,
+        )
 
         projects_data.append({
             "name": proj["project_name"],
@@ -485,6 +538,7 @@ def api_company_snapshot(ticker: str):
             "resource_date": _fmt_date_display(latest_date) if latest_date else None,
             "study": study_out,
             "revaluation": reval_out,
+            "completeness_score": completeness,
         })
 
     has_projects = len(projects_data) > 0
@@ -506,18 +560,24 @@ def api_company_snapshot(ticker: str):
         "SELECT COUNT(*) as n FROM documents WHERE ticker = ?", (ticker,)
     ).fetchone()["n"]
 
+    max_completeness = max(
+        (p["completeness_score"] for p in projects_data),
+        default=0.0,
+    )
+    has_meaningful_operations = max_completeness >= _TAB_VISIBILITY_THRESHOLD
+
     tabs = {
         "summary": True,
         "financials": has_financials,
         "capital": has_capital,
-        "operations": has_projects,
+        "operations": has_meaningful_operations,
         "documents": doc_count > 0,
         "holders": False,
     }
 
     conn.close()
 
-    has_data = has_financials or has_capital or doc_count > 0 or has_projects
+    has_data = has_financials or has_capital or doc_count > 0 or has_meaningful_operations
 
     snapshot = {
         "ticker": ticker,

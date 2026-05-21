@@ -47,6 +47,7 @@ def test_db():
             project_id INTEGER NOT NULL REFERENCES projects(project_id),
             document_id INTEGER,
             study_stage TEXT,
+            study_confidence_tier TEXT,
             study_date TEXT,
             mine_life_years REAL,
             annual_production REAL,
@@ -99,7 +100,8 @@ def test_db():
             npv_uplift REAL NOT NULL,
             npv_uplift_pct REAL NOT NULL,
             method_version TEXT NOT NULL,
-            warnings TEXT
+            warnings TEXT,
+            study_confidence_tier TEXT
         );
     """)
 

@@ -31,6 +31,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         SELECT s.study_id, s.project_id, s.mine_life_years, s.annual_production,
                s.recovery_pct, s.post_tax_npv, s.discount_rate_pct, s.tax_rate_pct,
                s.assumed_price_deck, s.reporting_currency, s.study_stage,
+               s.study_confidence_tier,
                p.project_id, p.company_id,
                pc.commodity, pc.is_primary
         FROM studies s
@@ -117,8 +118,8 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
             annual_production, annual_production_unit,
             mine_life_years, discount_rate_pct, tax_rate_pct, annuity_factor,
             npv_dfs, npv_spot, npv_uplift, npv_uplift_pct,
-            method_version, warnings
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            method_version, warnings, study_confidence_tier
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         study_id, study["project_id"], study["company_id"],
         datetime.now(timezone.utc).isoformat(),
@@ -131,6 +132,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         float(result.npv_uplift), float(result.npv_uplift_pct),
         result.method_version,
         json.dumps(result.warnings),
+        study["study_confidence_tier"],
     ))
     conn.commit()
     return cur.lastrowid

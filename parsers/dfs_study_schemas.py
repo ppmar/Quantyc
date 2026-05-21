@@ -13,13 +13,25 @@ class PriceAssumption(BaseModel):
     unit: str = Field(..., description="e.g., 'USD/oz', 'USD/lb', 'USD/t'")
 
 
-class DFSExtraction(BaseModel):
-    """Strict Pydantic schema for LLM output. Gemini validates against this directly via response_schema."""
+_TIER_BY_TYPE: dict[str, str] = {
+    "DFS": "definitive", "Updated DFS": "definitive",
+    "Revised DFS": "definitive", "FFS": "definitive",
+    "PFS": "indicative", "Updated PFS": "indicative",
+    "Scoping": "conceptual", "PEA": "conceptual",
+}
+
+
+class StudyExtraction(BaseModel):
+    """Strict Pydantic schema for LLM study extraction (DFS / PFS / Scoping)."""
 
     # ─── Identification ──────────────────────────────────────────────
     project_name: str = Field(..., min_length=2, max_length=120,
                               description="The deposit/project name only (e.g., 'Hemi', not 'Hemi Project')")
-    study_type: Literal["DFS", "Updated DFS", "Revised DFS", "FFS"]
+    study_type: Literal[
+        "DFS", "Updated DFS", "Revised DFS", "FFS",       # definitive tier
+        "PFS", "Updated PFS",                              # indicative tier
+        "Scoping", "PEA",                                  # conceptual tier
+    ]
     effective_date: Optional[date] = Field(None, description="The 'as at' date of the study, NOT the announcement date")
     primary_commodity: str = Field(..., description="Primary commodity code: Au, Cu, Li2O, U3O8, Ni, Zn, Fe, TREO, Co")
 
@@ -74,3 +86,11 @@ class DFSExtraction(BaseModel):
         """At least NPV (pre or post tax) AND initial capex must be present."""
         has_npv = self.post_tax_npv_millions is not None or self.pre_tax_npv_millions is not None
         return has_npv and self.initial_capex_millions is not None
+
+    def confidence_tier(self) -> str:
+        """Map study_type to confidence tier. Used by persistence layer."""
+        return _TIER_BY_TYPE[self.study_type]
+
+
+# Backward-compat alias. Remove after one release cycle once all code migrates.
+DFSExtraction = StudyExtraction

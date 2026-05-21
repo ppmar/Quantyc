@@ -69,7 +69,7 @@ def extract_classified() -> dict:
     from pipeline.extractors.issue_of_securities import extract_issue_of_securities
     from pipeline.normalize.company_financials import normalize_from_5b, normalize_from_securities
 
-    STANDARDIZED_TYPES = {"appendix_5b", "issue_of_securities", "resource_update", "study_dfs"}
+    STANDARDIZED_TYPES = {"appendix_5b", "issue_of_securities", "resource_update", "study_dfs", "study_pfs", "study_scoping"}
 
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
@@ -159,15 +159,15 @@ def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
     elif doc_type == "resource_update":
         _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats)
 
-    elif doc_type == "study_dfs":
-        _extract_dfs_study(doc_id, pdf_bytes, ticker, announcement_date, stats)
+    elif doc_type in ("study_dfs", "study_pfs", "study_scoping"):
+        _extract_study(doc_id, doc_type, pdf_bytes, ticker, announcement_date, stats)
 
 
-def _extract_dfs_study(doc_id, pdf_bytes, ticker, announcement_date, stats):
-    """Run DFS Gemini extractor and persist to projects + studies."""
+def _extract_study(doc_id, doc_type, pdf_bytes, ticker, announcement_date, stats):
+    """Run LLM study extractor (DFS/PFS/Scoping) and persist."""
     from datetime import date as date_type
     from parsers.dfs_study import (
-        parse as parse_dfs, detect_profile,
+        parse as parse_study, detect_profile,
         ExtractionError, MalformedDocumentError, LLM_MODEL,
     )
 
@@ -186,32 +186,47 @@ def _extract_dfs_study(doc_id, pdf_bytes, ticker, announcement_date, stats):
         ann_date = date_type.fromisoformat(ann_date)
 
     try:
-        result = parse_dfs(pdf_bytes, ticker=ticker, doc_id=str(doc_id),
-                           announcement_date=ann_date)
+        result = parse_study(pdf_bytes, ticker=ticker, doc_id=str(doc_id),
+                             announcement_date=ann_date)
     except (ExtractionError, MalformedDocumentError) as e:
-        _mark_failed(doc_id, f"dfs_parse_error:{e}")
+        _mark_failed(doc_id, f"study_parse_error:{e}")
         stats["failed"] += 1
         return
 
-    study_id = _persist_dfs_study(doc_id, ticker, result, LLM_MODEL)
+    # Tier mismatch logging: classifier said X, LLM extracted Y
+    expected_tier = {
+        "study_dfs": "definitive",
+        "study_pfs": "indicative",
+        "study_scoping": "conceptual",
+    }[doc_type]
+    actual_tier = result.confidence_tier()
+    if expected_tier != actual_tier:
+        logger.warning(
+            "Tier mismatch for doc %d (%s): classifier expected %s, LLM returned %s (%s)",
+            doc_id, ticker, expected_tier, actual_tier, result.study_type
+        )
+
+    study_id = _persist_study(doc_id, ticker, result, LLM_MODEL)
     _mark_parsed(doc_id)
     stats["extracted"] += 1
 
-    # Auto-trigger revaluation if study was persisted (Au/Cu only)
-    if study_id:
+    # Auto-trigger revaluation for definitive and indicative tiers only.
+    # Conceptual (Scoping/PEA) studies have too much uncertainty.
+    if study_id and actual_tier in ("definitive", "indicative"):
         try:
             from revaluation.pipeline import revalue_study
             conn = get_connection()
             reval_id = revalue_study(conn, study_id)
             if reval_id:
-                logger.info("Auto-revaluation #%d for study %d (%s)", reval_id, study_id, ticker)
+                logger.info("Auto-revaluation #%d for study %d (%s, tier=%s)",
+                            reval_id, study_id, ticker, actual_tier)
             conn.close()
         except Exception as e:
             logger.warning("Auto-revaluation failed for study %d: %s", study_id, e)
 
 
-def _persist_dfs_study(doc_id, ticker, result, model_name):
-    """Persist DFS extraction to projects (upsert) + studies (insert). Returns study_id."""
+def _persist_study(doc_id, ticker, result, model_name):
+    """Persist study extraction to projects (upsert) + studies (insert). Returns study_id."""
     import json as _json
 
     conn = get_connection()
@@ -251,7 +266,7 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
 
         cur = conn.execute("""
             INSERT INTO studies (
-                project_id, document_id, study_stage, study_date,
+                project_id, document_id, study_stage, study_confidence_tier, study_date,
                 mine_life_years, annual_production, recovery_pct,
                 initial_capex, sustaining_capex, opex,
                 post_tax_npv, pre_tax_npv, irr_pct, payback_years,
@@ -259,9 +274,9 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
                 assumed_price_deck, assumed_fx,
                 reporting_currency, discount_rate_pct, tax_rate_pct,
                 extraction_method, extraction_model
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            project_id, doc_id, result.study_type,
+            project_id, doc_id, result.study_type, result.confidence_tier(),
             result.effective_date.isoformat() if result.effective_date else None,
             float(result.mine_life_years) if result.mine_life_years else None,
             float(result.annual_production) if result.annual_production else None,
@@ -285,7 +300,7 @@ def _persist_dfs_study(doc_id, ticker, result, model_name):
         ))
         conn.commit()
         study_id = cur.lastrowid
-        logger.info("Persisted DFS study #%d for %s — %s", study_id, ticker, result.project_name)
+        logger.info("Persisted %s study #%d for %s — %s", result.study_type, study_id, ticker, result.project_name)
         return study_id
     except Exception:
         conn.rollback()

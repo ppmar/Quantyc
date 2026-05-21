@@ -46,13 +46,13 @@ class TestDetectProfile:
         pdf = _make_pdf("Final Feasibility Study Results")
         assert detect_profile(pdf) is True
 
-    def test_rejects_pfs(self):
+    def test_accepts_pfs(self):
         pdf = _make_pdf("Pre-Feasibility Study Results\nPFS confirms strong economics")
-        assert detect_profile(pdf) is False
+        assert detect_profile(pdf) is True
 
-    def test_rejects_scoping(self):
+    def test_accepts_scoping(self):
         pdf = _make_pdf("Scoping Study delivers positive results")
-        assert detect_profile(pdf) is False
+        assert detect_profile(pdf) is True
 
     def test_rejects_appendix_5b(self):
         pdf = _make_pdf("Appendix 5B\nQuarterly cash flow report")

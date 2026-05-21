@@ -36,7 +36,7 @@ HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/json"}
 PDF_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/pdf"}
 
 # Download and parse these doc types directly
-TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities", "resource_update", "study_dfs"}
+TARGET_DOC_TYPES = {"appendix_5b", "issue_of_securities", "resource_update", "study_dfs", "study_pfs", "study_scoping"}
 # Also download these to scan for embedded 5B forms
 SCAN_DOC_TYPES = {"quarterly_activity"}
 
@@ -236,8 +236,8 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
     elif doc_type == "resource_update":
         _extract_resource_update(doc_id, pdf_bytes)
 
-    elif doc_type == "study_dfs":
-        _extract_dfs(doc_id, pdf_bytes)
+    elif doc_type in ("study_dfs", "study_pfs", "study_scoping"):
+        _extract_study(doc_id, doc_type, pdf_bytes)
 
     elif doc_type in SCAN_DOC_TYPES:
         # Quarterly activity report — scan for embedded 5B
@@ -259,10 +259,10 @@ def _classify_and_extract(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
             _mark_status(doc_id, "skipped")
 
 
-def _extract_dfs(doc_id: int, pdf_bytes: bytes) -> None:
-    """Parse a DFS study and persist to projects + studies, then auto-revalue."""
-    from parsers.dfs_study import parse as parse_dfs, ExtractionError, MalformedDocumentError, LLM_MODEL
-    from pipeline.orchestrator import _persist_dfs_study
+def _extract_study(doc_id: int, doc_type: str, pdf_bytes: bytes) -> None:
+    """Parse a study (DFS/PFS/Scoping) and persist to projects + studies, then auto-revalue."""
+    from parsers.dfs_study import parse as parse_study, ExtractionError, MalformedDocumentError, LLM_MODEL
+    from pipeline.orchestrator import _persist_study
 
     conn = get_connection()
     doc = conn.execute(
@@ -281,33 +281,47 @@ def _extract_dfs(doc_id: int, pdf_bytes: bytes) -> None:
     ann_date = date_type.fromisoformat(ann_date_str) if ann_date_str else date_type.today()
 
     try:
-        result = parse_dfs(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
+        result = parse_study(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
     except MalformedDocumentError:
-        logger.info("Doc %d: not a DFS, skipping", doc_id)
+        logger.info("Doc %d: not a study, skipping", doc_id)
         _mark_status(doc_id, "skipped")
         return
     except ExtractionError as e:
-        logger.warning("Doc %d: DFS extraction failed: %s", doc_id, e)
-        _mark_status(doc_id, "failed", f"dfs_parse_error:{e}")
+        logger.warning("Doc %d: study extraction failed: %s", doc_id, e)
+        _mark_status(doc_id, "failed", f"study_parse_error:{e}")
         return
     except Exception as e:
-        logger.warning("Doc %d: DFS unexpected error: %s", doc_id, e)
-        _mark_status(doc_id, "failed", f"dfs_unexpected:{e}")
+        logger.warning("Doc %d: study unexpected error: %s", doc_id, e)
+        _mark_status(doc_id, "failed", f"study_unexpected:{e}")
         return
 
-    study_id = _persist_dfs_study(doc_id, ticker, result, LLM_MODEL)
-    _mark_status(doc_id, "parsed")
-    logger.info("Doc %d: parsed DFS for %s — %s, NPV=%s", doc_id, ticker, result.project_name,
-                result.post_tax_npv_millions)
+    # Tier mismatch logging
+    expected_tier = {
+        "study_dfs": "definitive",
+        "study_pfs": "indicative",
+        "study_scoping": "conceptual",
+    }[doc_type]
+    actual_tier = result.confidence_tier()
+    if expected_tier != actual_tier:
+        logger.warning(
+            "Tier mismatch doc %d (%s): classifier=%s, LLM=%s (%s)",
+            doc_id, ticker, expected_tier, actual_tier, result.study_type
+        )
 
-    # Auto-trigger revaluation
-    if study_id:
+    study_id = _persist_study(doc_id, ticker, result, LLM_MODEL)
+    _mark_status(doc_id, "parsed")
+    logger.info("Doc %d: parsed %s for %s — %s, NPV=%s", doc_id, result.study_type, ticker,
+                result.project_name, result.post_tax_npv_millions)
+
+    # Auto-trigger revaluation for definitive and indicative tiers only
+    if study_id and actual_tier in ("definitive", "indicative"):
         try:
             from revaluation.pipeline import revalue_study
             conn = get_connection()
             reval_id = revalue_study(conn, study_id)
             if reval_id:
-                logger.info("Auto-revaluation #%d for study %d (%s)", reval_id, study_id, ticker)
+                logger.info("Auto-revaluation #%d for study %d (%s, tier=%s)",
+                            reval_id, study_id, ticker, actual_tier)
             conn.close()
         except Exception as e:
             logger.warning("Auto-revaluation failed for study %d: %s", study_id, e)

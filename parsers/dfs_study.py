@@ -13,7 +13,7 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from parsers.dfs_study_schemas import DFSExtraction
+from parsers.dfs_study_schemas import StudyExtraction, DFSExtraction  # DFSExtraction kept as alias
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,9 @@ class MalformedDocumentError(Exception):
 
 # ─── Profile detection (cheap, deterministic) ────────────────────────
 
-_DFS_PROFILE_PATTERNS = [
+# Any of these in pages 1-3 qualifies the document as a study extraction candidate.
+_STUDY_PROFILE_PATTERNS = [
+    # Definitive
     re.compile(r"Definitive\s+Feasibility\s+Study", re.IGNORECASE),
     re.compile(r"\bDFS\b", re.IGNORECASE),
     re.compile(r"Final\s+Feasibility\s+Study", re.IGNORECASE),
@@ -39,21 +41,29 @@ _DFS_PROFILE_PATTERNS = [
     re.compile(r"\bBFS\b", re.IGNORECASE),
     re.compile(r"Feasibility\s+(?:Study\s+)?(?:Update|Results|Outcomes)", re.IGNORECASE),
     re.compile(r"Feasibility\s+Study\s+(?:Confirms|Delivers|Completed?)", re.IGNORECASE),
-]
-
-_DFS_DISQUALIFIER_PATTERNS = [
+    # Pre-feasibility
     re.compile(r"Pre[-\s]?Feasibility\s+Study", re.IGNORECASE),
     re.compile(r"\bPFS\b", re.IGNORECASE),
+    # Scoping / PEA
     re.compile(r"Scoping\s+Study", re.IGNORECASE),
+    re.compile(r"Preliminary\s+Economic\s+Assessment", re.IGNORECASE),
+    re.compile(r"\bPEA\b", re.IGNORECASE),
+]
+
+# Documents we still want to disqualify (these are not study announcements at all).
+_STUDY_DISQUALIFIER_PATTERNS = [
     re.compile(r"Appendix\s*5B", re.IGNORECASE),
+    re.compile(r"Appendix\s*3[BHG]", re.IGNORECASE),
+    re.compile(r"Quarterly\s+Activities\s+Report", re.IGNORECASE),
+    re.compile(r"Half[-\s]?Year(?:ly)?\s+Report", re.IGNORECASE),
+    re.compile(r"Annual\s+Report", re.IGNORECASE),
 ]
 
 
 def detect_profile(pdf_bytes: bytes) -> bool:
     """
-    Cheap deterministic check that this PDF is plausibly a DFS announcement.
-    Runs BEFORE any LLM call to avoid wasting quota on misclassified documents.
-    Reads only the first 3 pages of text via pdfplumber.
+    Cheap deterministic check that this PDF is plausibly a study announcement
+    (DFS, PFS, or Scoping). Runs BEFORE any LLM call.
     """
     import pdfplumber
 
@@ -66,14 +76,15 @@ def detect_profile(pdf_bytes: bytes) -> bool:
         logger.warning("detect_profile: pdfplumber failed: %s", e)
         return False
 
-    has_profile = any(p.search(text) for p in _DFS_PROFILE_PATTERNS)
+    has_profile = any(p.search(text) for p in _STUDY_PROFILE_PATTERNS)
     if not has_profile:
         return False
 
-    has_disqualifier = any(p.search(first_page_text or "") for p in _DFS_DISQUALIFIER_PATTERNS)
+    # Disqualifiers must be on page 1 to win — a body-text mention of "Appendix 5B"
+    # in a real study PDF should not disqualify it.
+    has_disqualifier = any(p.search(first_page_text or "") for p in _STUDY_DISQUALIFIER_PATTERNS)
     if has_disqualifier:
-        # Allow if any DFS profile pattern also appears on page 1 (DFS that mentions PFS history)
-        if any(p.search(first_page_text or "") for p in _DFS_PROFILE_PATTERNS):
+        if any(p.search(first_page_text or "") for p in _STUDY_PROFILE_PATTERNS):
             return True
         return False
 
@@ -113,12 +124,12 @@ def parse(
     ticker: str,
     doc_id: str,
     announcement_date: date,
-) -> DFSExtraction:
+) -> StudyExtraction:
     """
     Extract DFS data via Gemini 2.5 Flash. Returns validated Pydantic model or raises.
     """
     if not detect_profile(pdf_bytes):
-        raise MalformedDocumentError("not_a_dfs_document")
+        raise MalformedDocumentError("not_a_study_document")
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -141,7 +152,7 @@ def parse(
             ],
             config={
                 "response_mime_type": "application/json",
-                "response_schema": DFSExtraction,
+                "response_schema": StudyExtraction,
                 "temperature": 0.0,
             },
         )
@@ -150,13 +161,13 @@ def parse(
         raise ExtractionError(f"llm_api_error:{type(e).__name__}:{e}")
 
     try:
-        result: DFSExtraction = response.parsed
+        result: StudyExtraction = response.parsed
         if result is None:
             import json
             raw = json.loads(response.text)
             # Gemini sometimes returns string "null" instead of JSON null
             _fix_string_nulls(raw)
-            result = DFSExtraction.model_validate(raw)
+            result = StudyExtraction.model_validate(raw)
     except ValidationError as e:
         logger.error("DFS Pydantic validation failed for doc %s: %s", doc_id, e)
         raise ExtractionError(f"validation_error:{e.error_count()}_errors")

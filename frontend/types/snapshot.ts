@@ -30,7 +30,9 @@ export type ResourceRow = {
 
 export type StudyData = {
   study_type: string;
+  study_confidence_tier: "definitive" | "indicative" | "conceptual" | null;
   study_date: string | null;
+  study_date_iso: string | null;
   reporting_currency: string | null;
   discount_rate_pct: number | null;
   post_tax_npv: number | null;
@@ -71,6 +73,7 @@ export type RevaluationData = {
   spot_source: string;
   spot_fetched_at: string;
   warnings: string[];
+  study_confidence_tier: "definitive" | "indicative" | "conceptual" | null;
 };
 
 export type ProjectData = {
@@ -85,6 +88,7 @@ export type ProjectData = {
   resource_date: string | null;
   study: StudyData | null;
   revaluation: RevaluationData | null;
+  completeness_score: number;
 };
 
 export type CashSection = {

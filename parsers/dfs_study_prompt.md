@@ -1,8 +1,28 @@
-# DFS Extraction Instructions for LLM
+# Study Extraction Instructions for LLM
 
-You are extracting economic parameters from a Definitive Feasibility Study (DFS)
-published by an ASX-listed mining company. The downstream system reproduces the DFS's
-NPV calculation at current commodity prices to detect market mispricing.
+You are extracting economic parameters from a mining feasibility study (DFS, PFS,
+or Scoping Study) published by an ASX-listed mining company. The downstream system
+reproduces the study's NPV calculation at current commodity prices to detect market
+mispricing.
+
+## Stage discrimination
+
+You must correctly identify the study stage from the document. Use the headline,
+the first three pages, and any explicit stage labels in the executive summary.
+
+- `DFS` — "Definitive Feasibility Study", "DFS", "Final FS", "FFS", "Bankable FS", "BFS"
+- `Updated DFS` — an explicit update of a prior DFS (the doc usually references the prior NPV)
+- `Revised DFS` — explicitly labeled "Revised"
+- `PFS` — "Pre-Feasibility Study", "PFS"
+- `Updated PFS` — explicit update of a prior PFS
+- `Scoping` — "Scoping Study"
+- `PEA` — "Preliminary Economic Assessment" (typically TSX dual-listed Australian issuers)
+
+**If the document references multiple stages (e.g., "Updated PFS following the 2022 Scoping
+Study"), use the stage of the CURRENT study being announced, not the historical one.**
+
+**If the stage is genuinely ambiguous, prefer the lower-confidence label.** A document
+that mixes PFS-grade and DFS-grade estimates should be labeled PFS. Do not promote.
 
 ## Critical: production must be PAYABLE production
 
@@ -73,7 +93,7 @@ Look for "effective tax rate", "company tax rate", or "royalty + tax". Common va
 5. discount_rate_pct is REQUIRED — DFS always state their discount rate (e.g., 8.0 for "NPV8" or "NPV at 8%").
 6. project_name is the deposit/project name only (e.g., "Hemi", "Kathleen Valley", "Pilgangoora"). Strip trailing "Project", "Mine", "Deposit". Never use placeholder text.
 7. price_assumptions: extract base case prices used in the economic model. One entry per commodity. Include unit explicitly.
-8. study_type: "DFS" for first DFS, "Updated DFS" or "Revised DFS" if explicitly stated, "FFS" for Final Feasibility Study.
+8. study_type: see "Stage discrimination" above. Use the exact string that matches.
 9. extraction_warnings: include concerns like mixed currencies without FX, multiple scenarios where you picked base case, project_name ambiguity.
 10. All numeric fields must be single numbers, not ranges. If a value is a range (e.g., "6-7 Mt/yr"), use the midpoint (6.5) and add a warning to extraction_warnings noting the original range.
 

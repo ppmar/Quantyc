@@ -1,0 +1,107 @@
+"""Tests for api/portfolio.py endpoints."""
+import sqlite3
+from unittest.mock import patch
+
+import pytest
+
+from tests._portfolio_db_setup import setup_test_db
+
+
+@pytest.fixture
+def client(tmp_path):
+    """Flask test client with seeded test DB."""
+    db_path = tmp_path / "test.db"
+    setup_test_db(str(db_path)).close()
+
+    def _get_test_connection():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    with patch("api.portfolio.get_connection", _get_test_connection):
+        from api.portfolio import bp
+        from flask import Flask
+        app = Flask(__name__)
+        app.register_blueprint(bp)
+        app.config["TESTING"] = True
+
+        with app.test_client() as c:
+            yield c
+
+
+class TestPortfolioCompanies:
+    def test_returns_companies(self, client):
+        resp = client.get("/api/portfolio/companies")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "companies" in data
+        assert "total_companies" in data
+        assert data["total_companies"] >= 1
+
+    def test_response_structure(self, client):
+        resp = client.get("/api/portfolio/companies")
+        data = resp.get_json()
+        if data["companies"]:
+            c = data["companies"][0]
+            assert "ticker" in c
+            assert "active_project_count" in c
+            assert "most_advanced_stage" in c
+            assert "is_single_project" in c
+
+    def test_single_project_filter(self, client):
+        resp = client.get("/api/portfolio/companies?single_project_only=true")
+        data = resp.get_json()
+        for c in data["companies"]:
+            assert c["is_single_project"] is True
+
+    def test_recent_study_filter(self, client):
+        resp = client.get("/api/portfolio/companies?has_recent_study=true")
+        data = resp.get_json()
+        for c in data["companies"]:
+            assert c["has_recent_study"] is True
+
+    def test_excludes_companies_with_no_active_projects(self, client):
+        resp = client.get("/api/portfolio/companies")
+        data = resp.get_json()
+        tickers = [c["ticker"] for c in data["companies"]]
+        assert "ZZZ" not in tickers
+
+    def test_most_advanced_stage_derived(self, client):
+        resp = client.get("/api/portfolio/companies")
+        data = resp.get_json()
+        deg = next((c for c in data["companies"] if c["ticker"] == "DEG"), None)
+        assert deg is not None
+        assert deg["most_advanced_stage"] == "feasibility"
+
+
+class TestPortfolioCompanyDetail:
+    def test_returns_projects(self, client):
+        resp = client.get("/api/portfolio/companies/DEG")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ticker"] == "DEG"
+        assert "projects" in data
+        assert len(data["projects"]) >= 1
+
+    def test_project_structure(self, client):
+        resp = client.get("/api/portfolio/companies/DEG")
+        data = resp.get_json()
+        proj = data["projects"][0]
+        assert "project_name" in proj
+        assert "stage" in proj
+        assert "stage_source" in proj
+        assert "is_active" in proj
+        assert "document_counts" in proj
+
+    def test_404_unknown_ticker(self, client):
+        resp = client.get("/api/portfolio/companies/NOPE")
+        assert resp.status_code == 404
+
+    def test_stage_confidence_from_inference(self, client):
+        resp = client.get("/api/portfolio/companies/DEG")
+        data = resp.get_json()
+        hemi = next((p for p in data["projects"] if p["project_name"] == "Hemi"), None)
+        assert hemi is not None
+        assert hemi["stage_confidence"] == "high"
+        assert hemi["stage_source"] == "gemini_inferred"

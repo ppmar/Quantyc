@@ -60,12 +60,14 @@ from api.documents import bp as documents_bp
 from api.financials import bp as financials_bp
 from api.review import bp as review_bp
 from api.snapshot import bp as snapshot_bp
+from api.portfolio import bp as portfolio_bp
 
 app.register_blueprint(upload_bp)
 app.register_blueprint(documents_bp)
 app.register_blueprint(financials_bp)
 app.register_blueprint(review_bp)
 app.register_blueprint(snapshot_bp)
+app.register_blueprint(portfolio_bp)
 
 
 # ---------------------------------------------------------------------------

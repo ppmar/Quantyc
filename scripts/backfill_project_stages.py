@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""
+Backfill project stages via Gemini classifier.
+
+Reads projects from DB, builds evidence per project, calls the classifier,
+writes results back. Idempotent with caching.
+
+Usage:
+    python -m scripts.backfill_project_stages              # all unclassified
+    python -m scripts.backfill_project_stages --ticker DEG  # one company
+    python -m scripts.backfill_project_stages --dry-run --limit 5
+    python -m scripts.backfill_project_stages --all         # re-classify everything
+"""
+import argparse
+import json
+import logging
+import os
+import random
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+from db import init_db, get_connection
+from parsers.project_stage_classifier import (
+    ClassificationError,
+    InsufficientEvidenceError,
+    ProjectEvidence,
+    ProjectStageInference,
+    StudyEvidence,
+    ResourceEvidence,
+    AnnEvidence,
+    classify_project,
+)
+
+
+def _apply_migrations():
+    conn = get_connection()
+    migrations_dir = Path(__file__).resolve().parent.parent / "db" / "migrations"
+    if migrations_dir.exists():
+        for m in sorted(migrations_dir.glob("*.sql")):
+            try:
+                conn.executescript(m.read_text())
+            except Exception:
+                pass
+    conn.close()
+
+
+def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -> list[dict]:
+    conn = get_connection()
+    if classify_all:
+        sql = """
+            SELECT p.project_id, p.project_name, p.company_id, p.country, p.state,
+                   p.stage, p.stage_source, p.stage_inferred_at,
+                   c.ticker
+            FROM projects p
+            JOIN companies c ON c.company_id = p.company_id
+        """
+        params: list = []
+    else:
+        sql = """
+            SELECT p.project_id, p.project_name, p.company_id, p.country, p.state,
+                   p.stage, p.stage_source, p.stage_inferred_at,
+                   c.ticker
+            FROM projects p
+            JOIN companies c ON c.company_id = p.company_id
+            WHERE (p.stage IS NULL
+               OR p.stage_source = 'ozmin'
+               OR p.stage_source IS NULL)
+        """
+        params = []
+
+    if ticker:
+        sql += " AND c.ticker = ?" if "WHERE" in sql else " WHERE c.ticker = ?"
+        params.append(ticker.upper())
+
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+
+    rows = conn.execute(sql, params).fetchall()
+    result = [dict(r) for r in rows]
+    conn.close()
+    return result
+
+
+def _should_skip_cached(project: dict) -> bool:
+    """Skip if already gemini_inferred and no new evidence since last inference."""
+    if project["stage_source"] != "gemini_inferred":
+        return False
+    if not project["stage_inferred_at"]:
+        return False
+
+    conn = get_connection()
+    inferred_at = project["stage_inferred_at"]
+    pid = project["project_id"]
+
+    # Check for new studies
+    new_study = conn.execute(
+        "SELECT 1 FROM studies WHERE project_id = ? AND created_at > ? LIMIT 1",
+        (pid, inferred_at),
+    ).fetchone()
+
+    # Check for new resources
+    new_resource = conn.execute(
+        "SELECT 1 FROM resources WHERE project_id = ? AND created_at > ? LIMIT 1",
+        (pid, inferred_at),
+    ).fetchone()
+
+    # Check for new documents (announcements)
+    new_doc = conn.execute("""
+        SELECT 1 FROM documents d
+        JOIN companies c ON c.ticker = d.ticker
+        JOIN projects p ON p.company_id = c.company_id AND p.project_id = ?
+        WHERE d.announcement_date > ?
+        LIMIT 1
+    """, (pid, inferred_at)).fetchone()
+
+    conn.close()
+    return not (new_study or new_resource or new_doc)
+
+
+def build_evidence(project: dict) -> ProjectEvidence:
+    """Assemble evidence from DB for a single project."""
+    conn = get_connection()
+    pid = project["project_id"]
+    cid = project["company_id"]
+    pname = project["project_name"] or ""
+
+    # Studies (latest 3)
+    study_rows = conn.execute("""
+        SELECT s.study_stage, s.study_date, d.header AS title, d.announcement_date
+        FROM studies s
+        LEFT JOIN documents d ON d.document_id = s.document_id
+        WHERE s.project_id = ?
+        ORDER BY COALESCE(s.study_date, d.announcement_date) DESC
+        LIMIT 3
+    """, (pid,)).fetchall()
+
+    studies = [
+        StudyEvidence(
+            study_stage=r["study_stage"] or "Unknown",
+            study_date=r["study_date"] or r["announcement_date"],
+            document_title=r["title"],
+        )
+        for r in study_rows
+    ]
+
+    # Resources (latest 3)
+    resource_rows = conn.execute("""
+        SELECT commodity, category, tonnes, grade, grade_unit, effective_date
+        FROM resources
+        WHERE project_id = ?
+        ORDER BY effective_date DESC
+        LIMIT 3
+    """, (pid,)).fetchall()
+
+    resources = [
+        ResourceEvidence(
+            commodity=r["commodity"],
+            category=r["category"],
+            tonnes=r["tonnes"],
+            effective_date=r["effective_date"],
+        )
+        for r in resource_rows
+    ]
+
+    # Recent announcements — try project name match first
+    ann_rows = conn.execute("""
+        SELECT header AS title, announcement_date
+        FROM documents
+        WHERE ticker = (SELECT ticker FROM companies WHERE company_id = ?)
+          AND announcement_date >= date('now', '-180 days')
+          AND (header LIKE '%' || ? || '%' OR ? = '')
+        ORDER BY announcement_date DESC
+        LIMIT 6
+    """, (cid, pname, pname)).fetchall()
+
+    # Fallback: any announcement by this company in last 90 days
+    if not ann_rows and pname:
+        ann_rows = conn.execute("""
+            SELECT header AS title, announcement_date
+            FROM documents
+            WHERE ticker = (SELECT ticker FROM companies WHERE company_id = ?)
+              AND announcement_date >= date('now', '-90 days')
+            ORDER BY announcement_date DESC
+            LIMIT 6
+        """, (cid,)).fetchall()
+
+    announcements = [
+        AnnEvidence(title=r["title"] or "", announcement_date=r["announcement_date"])
+        for r in ann_rows
+    ]
+
+    conn.close()
+    return ProjectEvidence(
+        studies=studies,
+        resources=resources,
+        recent_announcements=announcements,
+    )
+
+
+def _persist_result(project: dict, inference: ProjectStageInference, evidence: ProjectEvidence):
+    """Write classification result to DB."""
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    pid = project["project_id"]
+
+    conn.execute("""
+        UPDATE projects
+        SET stage = ?,
+            region = COALESCE(?, region),
+            stage_source = 'gemini_inferred',
+            stage_inferred_at = ?
+        WHERE project_id = ?
+    """, (inference.stage, inference.region, now, pid))
+
+    conn.execute("""
+        INSERT INTO project_stage_inferences
+            (project_id, stage, stage_confidence, region, reasoning, evidence_json, inferred_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        pid,
+        inference.stage,
+        inference.stage_confidence,
+        inference.region,
+        inference.reasoning,
+        json.dumps(evidence.to_dict()),
+        now,
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def _persist_insufficient(project: dict):
+    """Mark project as insufficient evidence without changing stage."""
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    conn.execute("""
+        UPDATE projects
+        SET stage_source = 'insufficient_evidence',
+            stage_inferred_at = ?
+        WHERE project_id = ?
+    """, (now, project["project_id"]))
+    conn.commit()
+    conn.close()
+
+
+def _classify_one(project: dict, dry_run: bool) -> dict:
+    """Classify a single project. Returns stats dict."""
+    ticker = project["ticker"]
+    pname = project["project_name"]
+    pid = project["project_id"]
+
+    evidence = build_evidence(project)
+
+    if dry_run:
+        logger.info("[%s] %s — evidence: %d studies, %d resources, %d announcements",
+                     ticker, pname, len(evidence.studies), len(evidence.resources),
+                     len(evidence.recent_announcements))
+        return {"status": "dry_run"}
+
+    try:
+        inference = classify_project(
+            project_id=pid,
+            project_name=pname,
+            company_ticker=ticker,
+            state=project["state"],
+            country=project["country"],
+            evidence=evidence,
+        )
+        _persist_result(project, inference, evidence)
+        region_str = inference.region or "no region"
+        logger.info("[%s] %s → %s (%s) [%s]",
+                     ticker, pname, inference.stage, inference.stage_confidence, region_str)
+        return {"status": "classified", "stage": inference.stage, "confidence": inference.stage_confidence}
+
+    except InsufficientEvidenceError:
+        _persist_insufficient(project)
+        logger.info("[%s] %s → insufficient evidence", ticker, pname)
+        return {"status": "insufficient"}
+
+    except ClassificationError as e:
+        logger.error("[%s] %s → classification error: %s", ticker, pname, e)
+        return {"status": "error", "error": str(e)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Backfill project stages via Gemini classifier")
+    parser.add_argument("--ticker", help="Restrict to one company ticker")
+    parser.add_argument("--limit", type=int, help="Max projects to process")
+    parser.add_argument("--all", action="store_true", help="Re-classify everything (including cached)")
+    parser.add_argument("--dry-run", action="store_true", help="Build evidence without calling Gemini")
+    parser.add_argument("--workers", type=int, default=4, help="Concurrency (default: 4)")
+    args = parser.parse_args()
+
+    init_db()
+    _apply_migrations()
+
+    projects = _fetch_projects(args.ticker, args.all, args.limit)
+    logger.info("Found %d projects to process", len(projects))
+
+    if not args.all:
+        before = len(projects)
+        projects = [p for p in projects if not _should_skip_cached(p)]
+        cached = before - len(projects)
+        if cached:
+            logger.info("Skipped %d cached (no new evidence)", cached)
+
+    if not projects:
+        logger.info("Nothing to classify")
+        return
+
+    stats = {"classified": 0, "insufficient": 0, "error": 0, "dry_run": 0, "cached": 0}
+    stage_counts: dict[str, int] = {}
+    confidence_counts: dict[str, int] = {}
+
+    if args.dry_run or args.workers <= 1:
+        for p in projects:
+            result = _classify_one(p, args.dry_run)
+            stats[result["status"]] = stats.get(result["status"], 0) + 1
+            if result.get("stage"):
+                stage_counts[result["stage"]] = stage_counts.get(result["stage"], 0) + 1
+            if result.get("confidence"):
+                confidence_counts[result["confidence"]] = confidence_counts.get(result["confidence"], 0) + 1
+    else:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {}
+            for p in projects:
+                # Jitter to avoid rate-limit bursts
+                time.sleep(0.05)
+                f = executor.submit(_classify_one, p, args.dry_run)
+                futures[f] = p
+
+            for f in as_completed(futures):
+                try:
+                    result = f.result()
+                    stats[result["status"]] = stats.get(result["status"], 0) + 1
+                    if result.get("stage"):
+                        stage_counts[result["stage"]] = stage_counts.get(result["stage"], 0) + 1
+                    if result.get("confidence"):
+                        confidence_counts[result["confidence"]] = confidence_counts.get(result["confidence"], 0) + 1
+                except Exception as e:
+                    logger.error("Worker error for %s: %s", futures[f]["project_name"], e)
+                    stats["error"] += 1
+
+    # Summary
+    logger.info("=" * 50)
+    logger.info("BACKFILL SUMMARY")
+    logger.info("  Classified: %d", stats["classified"])
+    logger.info("  Insufficient evidence: %d", stats["insufficient"])
+    logger.info("  Errors: %d", stats["error"])
+    if stats["dry_run"]:
+        logger.info("  Dry-run: %d", stats["dry_run"])
+    if stage_counts:
+        logger.info("  By stage: %s", stage_counts)
+    if confidence_counts:
+        logger.info("  By confidence: %s", confidence_counts)
+
+
+if __name__ == "__main__":
+    main()

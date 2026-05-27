@@ -122,6 +122,13 @@ export interface PortfolioCompany {
   has_recent_study: boolean;
   latest_study_date: string | null;
   latest_study_stage: string | null;
+  latest_revaluation: {
+    npv_dfs: number;
+    npv_spot: number;
+    npv_uplift_pct: number;
+    commodity: string;
+    price_spot: number;
+  } | null;
 }
 
 export interface PortfolioCompaniesResponse {
@@ -166,6 +173,17 @@ export interface PortfolioProject {
     contained_metal: number | null;
     contained_metal_unit: string | null;
     effective_date: string | null;
+  } | null;
+  latest_revaluation: {
+    commodity: string;
+    price_dfs: number;
+    price_spot: number;
+    npv_dfs: number;
+    npv_spot: number;
+    npv_uplift_pct: number;
+    computed_at: string;
+    method_version: string | null;
+    study_confidence_tier: string | null;
   } | null;
   document_counts: {
     studies: number;

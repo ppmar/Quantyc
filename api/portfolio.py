@@ -104,6 +104,25 @@ def portfolio_companies():
         if r["commodity"] not in comms:
             comms.append(r["commodity"])
 
+    # Latest revaluation per company (best uplift across projects)
+    reval_map: dict[str, dict] = {}
+    reval_rows = _query_db("""
+        SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift_pct, r.price_spot, r.commodity,
+               r.computed_at,
+               ROW_NUMBER() OVER (PARTITION BY c.company_id ORDER BY r.computed_at DESC) AS rn
+        FROM revaluations r
+        JOIN companies c ON c.company_id = r.company_id
+    """)
+    for rv in reval_rows:
+        if rv["rn"] == 1:
+            reval_map[rv["ticker"]] = {
+                "npv_dfs": rv["npv_dfs"],
+                "npv_spot": rv["npv_spot"],
+                "npv_uplift_pct": rv["npv_uplift_pct"],
+                "commodity": rv["commodity"],
+                "price_spot": rv["price_spot"],
+            }
+
     companies = []
     for r in rows:
         stages_list = _split_csv(r["stages_csv"])
@@ -128,6 +147,7 @@ def portfolio_companies():
             "has_recent_study": bool(r["latest_study_date"] and r["latest_study_date"] >= "2024-01-01"),
             "latest_study_date": r["latest_study_date"],
             "latest_study_stage": r["latest_study_stage"],
+            "latest_revaluation": reval_map.get(r["ticker"]),
         })
 
     # Apply filters
@@ -247,6 +267,17 @@ def portfolio_company_detail(ticker: str):
                 (SELECT COUNT(*) FROM documents WHERE ticker = ?) AS all_documents
         """, (pid, pid, ticker))
 
+        # Latest revaluation
+        latest_reval = _query_one("""
+            SELECT commodity, price_dfs, price_spot, npv_dfs, npv_spot,
+                   npv_uplift_pct, computed_at, method_version,
+                   study_confidence_tier
+            FROM revaluations
+            WHERE project_id = ?
+            ORDER BY computed_at DESC
+            LIMIT 1
+        """, (pid,))
+
         # Stage confidence from latest inference
         stage_confidence = None
         if proj["stage_source"] == "gemini_inferred":
@@ -272,6 +303,7 @@ def portfolio_company_detail(ticker: str):
             "is_active": is_active,
             "latest_study": latest_study,
             "latest_resource": latest_resource,
+            "latest_revaluation": latest_reval,
             "document_counts": doc_counts or {"studies": 0, "resources": 0, "all_documents": 0},
         })
 

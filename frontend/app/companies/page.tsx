@@ -113,7 +113,7 @@ function ExpandedRow({ ticker }: { ticker: string }) {
   if (loading) {
     return (
       <tr>
-        <td colSpan={8} className="px-6 py-4">
+        <td colSpan={9} className="px-6 py-4">
           <div className="animate-pulse space-y-2">
             {[1, 2].map((i) => (
               <div key={i} className="h-5 bg-zinc-800/30 rounded w-3/4" />
@@ -127,7 +127,7 @@ function ExpandedRow({ ticker }: { ticker: string }) {
   if (!detail || detail.projects.length === 0) {
     return (
       <tr>
-        <td colSpan={8} className="px-6 py-4 text-zinc-600 text-[13px]">
+        <td colSpan={9} className="px-6 py-4 text-zinc-600 text-[13px]">
           No project data available.
         </td>
       </tr>
@@ -170,9 +170,16 @@ function ExpandedRow({ ticker }: { ticker: string }) {
               : "—"}
           </td>
           <td className="px-3 py-1.5 text-[12px] text-zinc-500">
-            {p.latest_resource
-              ? `${p.latest_resource.category} ${p.latest_resource.commodity}`
-              : "—"}
+            {p.latest_revaluation ? (
+              <span>
+                <span className={p.latest_revaluation.npv_uplift_pct > 1 ? "text-green-400" : p.latest_revaluation.npv_uplift_pct < -0.1 ? "text-red-400" : "text-zinc-400"}>
+                  {p.latest_revaluation.npv_uplift_pct > 0 ? "+" : ""}{(p.latest_revaluation.npv_uplift_pct * 100).toFixed(0)}%
+                </span>
+                <span className="text-zinc-600 ml-1.5">
+                  spot ${p.latest_revaluation.npv_spot.toFixed(0)}M
+                </span>
+              </span>
+            ) : "—"}
           </td>
           <td className="px-3 py-1.5" />
         </tr>
@@ -346,6 +353,7 @@ export default function CompaniesPage() {
                   "Commodities",
                   "Sites",
                   "Latest study",
+                  "Spot reval.",
                   "",
                 ].map((h) => (
                   <th
@@ -408,6 +416,15 @@ export default function CompaniesPage() {
                         c.latest_study_date
                       )}
                     </td>
+                    <td className="px-3 py-2 text-[13px]">
+                      {c.latest_revaluation ? (
+                        <span className={c.latest_revaluation.npv_uplift_pct > 1 ? "text-green-400" : c.latest_revaluation.npv_uplift_pct < -0.1 ? "text-red-400" : "text-zinc-400"}>
+                          {c.latest_revaluation.npv_uplift_pct > 0 ? "+" : ""}{(c.latest_revaluation.npv_uplift_pct * 100).toFixed(0)}%
+                        </span>
+                      ) : (
+                        <span className="text-zinc-700">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-zinc-600 text-[13px]">
                       <span
                         className={`transition-transform inline-block ${expandedTicker === c.ticker ? "rotate-90" : ""}`}
@@ -427,7 +444,7 @@ export default function CompaniesPage() {
               {companies.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-3 py-8 text-center text-zinc-600 text-[13px]"
                   >
                     No companies match these filters.

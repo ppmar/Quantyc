@@ -157,7 +157,8 @@ def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
             stats["failed"] += 1
 
     elif doc_type == "resource_update":
-        _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats)
+        _mark_skipped(doc_id)
+        stats["skipped"] += 1
 
     elif doc_type in ("study_dfs", "study_pfs", "study_scoping"):
         _extract_study(doc_id, doc_type, pdf_bytes, ticker, announcement_date, stats)

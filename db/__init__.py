@@ -1,7 +1,9 @@
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent / "quantyc.db"
+_volume = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+DB_PATH = Path(_volume) / "quantyc.db" if _volume else Path(__file__).resolve().parent / "quantyc.db"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 

@@ -43,6 +43,9 @@ def _safe_add_columns(conn):
         ("resources", "cutoff_grade_unit", "TEXT"),
         ("projects", "source", "TEXT"),
         ("resources", "section", "TEXT"),
+        # 0007 migration's revaluations ALTER never lands on DBs where the
+        # studies ALTER already ran (executescript aborts on duplicate column).
+        ("revaluations", "study_confidence_tier", "TEXT"),
     ]
     for table, col, col_type in additions:
         try:

@@ -203,6 +203,7 @@ export default function CompaniesPage() {
   const [minStage, setMinStage] = useState("");
   const [singleProject, setSingleProject] = useState(false);
   const [studyAfter, setStudyAfter] = useState("");
+  const [supportedOnly, setSupportedOnly] = useState(true);
   const [sort, setSort] = useState("most_advanced_stage_desc");
 
   const fetchData = useCallback(() => {
@@ -213,6 +214,7 @@ export default function CompaniesPage() {
     if (minStage) filters.min_stage = minStage;
     if (singleProject) filters.single_project_only = "true";
     if (studyAfter) filters.study_after = studyAfter;
+    if (supportedOnly) filters.supported_only = "true";
 
     api
       .portfolioCompanies(filters)
@@ -222,7 +224,7 @@ export default function CompaniesPage() {
         setAsOf(data.as_of);
       })
       .finally(() => setLoading(false));
-  }, [country, commodity, minStage, singleProject, studyAfter, sort]);
+  }, [country, commodity, minStage, singleProject, studyAfter, supportedOnly, sort]);
 
   useEffect(() => {
     fetchData();
@@ -295,6 +297,19 @@ export default function CompaniesPage() {
             </option>
           ))}
         </select>
+
+        <label
+          className="flex items-center gap-1.5 h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-300 cursor-pointer select-none"
+          title="Show only Au/Ag/Cu companies that have a DFS or PFS study"
+        >
+          <input
+            type="checkbox"
+            checked={supportedOnly}
+            onChange={(e) => setSupportedOnly(e.target.checked)}
+            className="accent-zinc-400"
+          />
+          Au/Ag/Cu + DFS/PFS
+        </label>
 
         <select
           value={singleProject ? "single" : "all"}

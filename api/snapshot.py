@@ -566,11 +566,18 @@ def api_company_snapshot(ticker: str):
     )
     has_meaningful_operations = max_completeness >= _TAB_VISIBILITY_THRESHOLD
 
+    # Comparison tab needs a commodity we have a price feed for (Au/Ag/Cu).
+    _FEED_COMMODITIES = {"Au", "Ag", "Cu"}
+    has_comparison = any(
+        c in _FEED_COMMODITIES for p in projects_data for c in p["commodities"]
+    )
+
     tabs = {
         "summary": True,
         "financials": has_financials,
         "capital": has_capital,
         "operations": has_meaningful_operations,
+        "comparison": has_comparison,
         "documents": doc_count > 0,
         "holders": False,
     }

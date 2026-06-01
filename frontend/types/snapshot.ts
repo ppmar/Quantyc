@@ -130,6 +130,7 @@ export type TabVisibility = {
   financials: boolean;
   capital: boolean;
   operations: boolean;
+  comparison: boolean;
   documents: boolean;
   holders: boolean;
 };

@@ -9,6 +9,7 @@ import { CashTrajectoryChart } from "@/components/company/CashTrajectoryChart";
 import { ActivityFeed } from "@/components/company/ActivityFeed";
 import { SnapshotSkeleton } from "@/components/company/Skeleton";
 import { OperationsTab } from "./OperationsTab";
+import { ComparisonTab } from "./ComparisonTab";
 
 export default function CompanyPage({
   params,
@@ -98,6 +99,10 @@ export default function CompanyPage({
 
       {activeTab === "operations" && (
         <OperationsTab projects={data.projects ?? []} />
+      )}
+
+      {activeTab === "comparison" && (
+        <ComparisonTab ticker={data.ticker} projects={data.projects ?? []} />
       )}
     </div>
   );

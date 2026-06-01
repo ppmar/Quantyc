@@ -120,6 +120,7 @@ export interface PortfolioCompany {
   states: string[];
   regions: string[];
   has_recent_study: boolean;
+  has_dfs_pfs: boolean;
   latest_study_date: string | null;
   latest_study_stage: string | null;
   latest_revaluation: {
@@ -199,6 +200,17 @@ export interface PortfolioCompanyDetail {
   projects: PortfolioProject[];
 }
 
+export interface PriceComparisonResponse {
+  ticker: string;
+  commodity: string;
+  range: string;
+  stock_symbol: string;
+  commodity_symbol: string;
+  as_of: string;
+  series: { date: string; stock: number; commodity: number }[];
+  error?: string;
+}
+
 export const api = {
   stats: () => fetchAPI<Stats>("/api/stats"),
   companies: () => fetchAPI<Company[]>("/api/companies"),
@@ -243,6 +255,10 @@ export const api = {
   portfolioCompany: (ticker: string) =>
     fetchAPI<PortfolioCompanyDetail>(
       `/api/portfolio/companies/${ticker.toUpperCase()}`
+    ),
+  priceComparison: (ticker: string, commodity: string, range: string) =>
+    fetchAPI<PriceComparisonResponse>(
+      `/api/company/${ticker.toUpperCase()}/price-comparison?commodity=${encodeURIComponent(commodity)}&range=${range}`
     ),
   upload: (ticker: string, files: FileList) => {
     const form = new FormData();

@@ -63,6 +63,45 @@ def fetch_yahoo_quote(symbol: str) -> Decimal:
     return Decimal(str(price))
 
 
+def fetch_yahoo_history(symbol: str, period1: int, period2: int,
+                        interval: str = "1d") -> list[tuple[str, float]]:
+    """
+    Daily/weekly close history via v8 chart endpoint.
+    period1/period2 are unix epoch seconds. Returns [(iso_date, close)],
+    skipping points with a null close. Raises PriceFetchError on failure.
+    """
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; Quantyc/1.0)",
+        "Accept": "application/json",
+    }
+    params = {"period1": period1, "period2": period2, "interval": interval}
+
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        raise PriceFetchError(f"yahoo_http_error:{type(e).__name__}:{e}")
+
+    results = data.get("chart", {}).get("result", [])
+    if not results:
+        raise PriceFetchError(f"yahoo_empty_result:{symbol}")
+
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+    closes = quote.get("close") or []
+
+    series: list[tuple[str, float]] = []
+    for ts, close in zip(timestamps, closes):
+        if close is None:
+            continue
+        iso = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+        series.append((iso, float(close)))
+    return series
+
+
 def get_or_fetch_price(conn: sqlite3.Connection, commodity: str) -> tuple[Decimal, int]:
     """
     Returns (price, price_id). Uses cache if a price was fetched within CACHE_TTL_HOURS.

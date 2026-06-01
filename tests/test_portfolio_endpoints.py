@@ -74,6 +74,24 @@ class TestPortfolioCompanies:
         data = resp.get_json()
         assert "DEG" not in [c["ticker"] for c in data["companies"]]
 
+    def test_supported_only_keeps_au_dfs_drops_lithium(self, client):
+        resp = client.get("/api/portfolio/companies?supported_only=true")
+        data = resp.get_json()
+        assert data["filters_applied"]["supported_only"] is True
+        tickers = [c["ticker"] for c in data["companies"]]
+        assert "DEG" in tickers      # Au + DFS (definitive)
+        assert "LIT" not in tickers  # Li2O excluded despite having a DFS
+
+    def test_supported_only_off_shows_lithium(self, client):
+        resp = client.get("/api/portfolio/companies")
+        data = resp.get_json()
+        assert "LIT" in [c["ticker"] for c in data["companies"]]
+
+    def test_has_dfs_pfs_flag(self, client):
+        resp = client.get("/api/portfolio/companies")
+        deg = next(c for c in resp.get_json()["companies"] if c["ticker"] == "DEG")
+        assert deg["has_dfs_pfs"] is True
+
     def test_excludes_companies_with_no_active_projects(self, client):
         resp = client.get("/api/portfolio/companies")
         data = resp.get_json()

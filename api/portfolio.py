@@ -81,7 +81,13 @@ def portfolio_companies():
                GROUP_CONCAT(DISTINCT ap.state) AS states_csv,
                GROUP_CONCAT(DISTINCT ap.region) AS regions_csv,
                MAX(CASE WHEN ls.rn = 1 THEN ls.effective_date END) AS latest_study_date,
-               MAX(CASE WHEN ls.rn = 1 THEN ls.study_stage END) AS latest_study_stage
+               MAX(CASE WHEN ls.rn = 1 THEN ls.study_stage END) AS latest_study_stage,
+               EXISTS (
+                   SELECT 1 FROM studies st
+                   JOIN projects pp ON pp.project_id = st.project_id
+                   WHERE pp.company_id = c.company_id
+                     AND st.study_confidence_tier IN ('definitive', 'indicative')
+               ) AS has_dfs_pfs
         FROM companies c
         LEFT JOIN active_projects ap ON ap.company_id = c.company_id
         LEFT JOIN latest_study ls ON ls.project_id = ap.project_id AND ls.rn = 1
@@ -145,6 +151,7 @@ def portfolio_companies():
             "states": _split_csv(r["states_csv"]),
             "regions": _split_csv(r["regions_csv"]),
             "has_recent_study": bool(r["latest_study_date"] and r["latest_study_date"] >= "2024-01-01"),
+            "has_dfs_pfs": bool(r["has_dfs_pfs"]),
             "latest_study_date": r["latest_study_date"],
             "latest_study_stage": r["latest_study_stage"],
             "latest_revaluation": reval_map.get(r["ticker"]),
@@ -157,6 +164,7 @@ def portfolio_companies():
     country = request.args.get("country")
     recent_study = request.args.get("has_recent_study", "false").lower() == "true"
     study_after = request.args.get("study_after")  # ISO date 'YYYY-MM-DD'
+    supported_only = request.args.get("supported_only", "false").lower() == "true"
     sort_key = request.args.get("sort", "most_advanced_stage_desc")
     limit = min(int(request.args.get("limit", "200")), 500)
 
@@ -178,6 +186,12 @@ def portfolio_companies():
             c for c in companies
             if c["latest_study_date"] and c["latest_study_date"] >= study_after
         ]
+    if supported_only:
+        _SUPPORTED = {"Au", "Ag", "Cu"}
+        companies = [
+            c for c in companies
+            if c["has_dfs_pfs"] and any(cm in _SUPPORTED for cm in c["primary_commodities"])
+        ]
 
     # Sort
     if sort_key == "most_advanced_stage_desc":
@@ -198,6 +212,7 @@ def portfolio_companies():
             "country": country,
             "has_recent_study": recent_study,
             "study_after": study_after,
+            "supported_only": supported_only,
             "sort": sort_key,
             "limit": limit,
         },

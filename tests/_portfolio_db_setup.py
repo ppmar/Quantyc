@@ -180,8 +180,8 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
 
     # Study
     conn.execute(
-        "INSERT INTO studies (project_id, document_id, study_stage, study_date, post_tax_npv, reporting_currency) VALUES (?, ?, ?, ?, ?, ?)",
-        (hemi_id, doc_id, "DFS", "2024-08-15", 2900.0, "AUD"),
+        "INSERT INTO studies (project_id, document_id, study_stage, study_confidence_tier, study_date, post_tax_npv, reporting_currency) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (hemi_id, doc_id, "DFS", "definitive", "2024-08-15", 2900.0, "AUD"),
     )
 
     # Resource
@@ -194,6 +194,27 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
     conn.execute(
         "INSERT INTO project_stage_inferences (project_id, stage, stage_confidence, region, reasoning, evidence_json, inferred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (hemi_id, "feasibility", "high", "Pilbara", "DFS completed Aug 2024", "{}", now),
+    )
+
+    # Company: LIT (Li2O DFS — active, but excluded by supported_only since
+    # lithium isn't in {Au,Ag,Cu})
+    conn.execute(
+        "INSERT INTO companies (ticker, name, first_seen_at, last_updated_at) VALUES (?, ?, ?, ?)",
+        ("LIT", "Lithium Co", now, now),
+    )
+    lit_id = conn.execute("SELECT company_id FROM companies WHERE ticker='LIT'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO projects (company_id, project_name, country, stage, created_at) VALUES (?, ?, ?, ?, ?)",
+        (lit_id, "Brine A", "Australia", "feasibility", now),
+    )
+    brine_id = conn.execute("SELECT project_id FROM projects WHERE project_name='Brine A'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, ?, ?)",
+        (brine_id, "Li2O", 1),
+    )
+    conn.execute(
+        "INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date, post_tax_npv, reporting_currency) VALUES (?, ?, ?, ?, ?, ?)",
+        (brine_id, "DFS", "definitive", "2024-09-01", 500.0, "AUD"),
     )
 
     conn.commit()

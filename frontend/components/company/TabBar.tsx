@@ -5,6 +5,7 @@ import type { TabVisibility } from "@/types/snapshot";
 const TAB_DEFS: { key: keyof TabVisibility; label: string }[] = [
   { key: "summary", label: "Summary" },
   { key: "operations", label: "Operations" },
+  { key: "comparison", label: "Comparison" },
 ];
 
 export function TabBar({

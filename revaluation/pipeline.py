@@ -60,10 +60,11 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     if missing:
         raise RevaluationError(f"missing_fields:{','.join(missing)}")
 
-    # Production unit: oz for Au, t for Cu (per LLM prompt instructions)
-    production_unit = "oz" if commodity == "Au" else "t"
+    # Production unit: oz for Au/Ag, t for Cu (per LLM prompt instructions)
+    production_unit = "oz" if commodity in ("Au", "Ag") else "t"
 
-    # Sanity check: if Au production < 1000, Gemini likely reported in koz
+    # Sanity check: if Au production < 1000, Gemini likely reported in koz.
+    # Silver is excluded — Moz-scale output makes the koz heuristic unsafe.
     annual_prod = study["annual_production"]
     if commodity == "Au" and annual_prod is not None and annual_prod < 1000:
         logger.warning("Study %d: annual_production=%.1f oz looks like koz, multiplying by 1000",

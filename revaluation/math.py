@@ -11,7 +11,10 @@ from typing import Optional
 METHOD_VERSION = "first_order_v2"
 DEFAULT_TAX_RATE = Decimal("0.30")
 
-SUPPORTED_COMMODITIES = {"Au", "Cu"}
+SUPPORTED_COMMODITIES = {"Au", "Ag", "Cu"}
+
+# Commodities priced and produced per troy ounce (no unit conversion needed).
+_OZ_COMMODITIES = {"Au", "Ag"}
 
 
 @dataclass(frozen=True)
@@ -76,10 +79,10 @@ def normalize_production_to_unit_price_basis(
             Convert tonnes -> lb: 1 t = 2204.62262 lb.
     """
     warnings = []
-    if commodity == "Au":
+    if commodity in _OZ_COMMODITIES:
         if production_unit != "oz":
             raise RevaluationError(
-                f"Au production must be in 'oz', got '{production_unit}'. "
+                f"{commodity} production must be in 'oz', got '{production_unit}'. "
                 f"Check DFS extraction."
             )
         return annual_production, warnings
@@ -110,7 +113,7 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
         warnings.append(f"tax_rate_defaulted_to_{DEFAULT_TAX_RATE * 100}pct")
 
     # Normalize production units to match price unit basis
-    price_unit_basis = "oz" if inp.commodity == "Au" else "lb"
+    price_unit_basis = "oz" if inp.commodity in _OZ_COMMODITIES else "lb"
     normalized_production, conv_warnings = normalize_production_to_unit_price_basis(
         inp.annual_production,
         inp.annual_production_unit,

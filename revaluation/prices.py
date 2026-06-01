@@ -1,5 +1,5 @@
 """
-Yahoo Finance spot price fetcher for Au, Cu, and AUD/USD FX.
+Yahoo Finance spot price fetcher for Au, Ag, Cu, and AUD/USD FX.
 
 Uses the unofficial query2.finance.yahoo.com endpoint via requests.
 No yfinance dependency — that library is heavyweight and we only need quotes.
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Symbol -> (commodity_code, unit, multiplier_to_canonical_unit)
 SYMBOL_MAP = {
     "GC=F":     ("Au", "USD/oz", Decimal("1")),
+    "SI=F":     ("Ag", "USD/oz", Decimal("1")),
     "HG=F":     ("Cu", "USD/lb", Decimal("1")),
     "AUDUSD=X": ("AUDUSD", "USD_per_AUD", Decimal("1")),
 }

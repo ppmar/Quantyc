@@ -36,6 +36,31 @@ def test_annuity_factor_negative_years_raises():
         annuity_factor(Decimal("8.0"), Decimal("-1"))
 
 
+# ── Silver USD revaluation ────────────────────────────────────────
+
+
+def test_revalue_silver_usd_reporting():
+    """Silver behaves like gold: oz production, USD/oz price, no FX."""
+    inp = RevaluationInput(
+        commodity="Ag",
+        price_dfs_usd=Decimal("20"),
+        price_spot_usd=Decimal("30"),
+        annual_production=Decimal("5000000"),  # 5 Moz/yr
+        annual_production_unit="oz",
+        mine_life_years=Decimal("10"),
+        discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("30.0"),
+        npv_dfs=Decimal("200"),                # USD M
+        reporting_currency="USD",
+        fx_rate=None,
+    )
+    result = revalue(inp)
+    # A(5%,10)=7.7217; ΔRev=5e6*10=50e6; ΔNPV=50e6*7.7217*0.7=270.26M
+    assert result.annuity_factor == Decimal("7.7217")
+    assert abs(result.npv_spot - Decimal("470.26")) < Decimal("0.5")
+    assert abs(result.npv_uplift_pct - Decimal("1.3513")) < Decimal("0.001")
+
+
 # ── Gold AUD revaluation ──────────────────────────────────────────
 
 

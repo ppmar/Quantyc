@@ -484,7 +484,7 @@ def api_company_snapshot(ticker: str):
                         warnings = _rjson.loads(reval_row["warnings"])
                     except Exception:
                         pass
-                price_unit = "USD/oz" if reval_row["commodity"] == "Au" else "USD/lb"
+                price_unit = "USD/oz" if reval_row["commodity"] in ("Au", "Ag") else "USD/lb"
                 reval_out = {
                     "commodity": reval_row["commodity"],
                     "price_dfs": reval_row["price_dfs"],

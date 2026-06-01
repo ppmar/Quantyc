@@ -66,7 +66,7 @@ If only one is stated, leave the other null. NEVER infer one from the other.
 - `reporting_currency` is the currency of the NPV.
 - All monetary fields (NPV, capex, opex_per_unit when in $/t terms) must be in that currency.
 - For commodity prices in `price_assumptions`: use the price as quoted in the DFS,
-  typically USD/oz for gold or USD/lb for copper, REGARDLESS of reporting_currency.
+  typically USD/oz for gold and silver, or USD/lb for copper, REGARDLESS of reporting_currency.
 - For FX assumption: extract if explicitly stated in the assumptions table.
 
 ## Tax rate
@@ -81,6 +81,9 @@ Look for "effective tax rate", "company tax rate", or "royalty + tax". Common va
 ## Production unit normalization
 
 - For gold: `oz` (troy ounces). NOT `kg`, NOT `g`, NOT `tonnes`.
+- For silver: `oz` (troy ounces), as an **absolute** number. NOT Moz, NOT koz.
+  Silver DFSs usually quote "X Moz/yr" — convert to absolute ounces
+  (e.g. "2.7 Moz" → annual_production = 2700000).
 - For copper: `t` (metric tonnes of contained copper). NOT `lb` for annual production
   even though the price is in USD/lb.
 

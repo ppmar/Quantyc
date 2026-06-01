@@ -64,12 +64,18 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     production_unit = "oz" if commodity in ("Au", "Ag") else "t"
 
     # Sanity check: if Au production < 1000, Gemini likely reported in koz.
-    # Silver is excluded — Moz-scale output makes the koz heuristic unsafe.
     annual_prod = study["annual_production"]
     if commodity == "Au" and annual_prod is not None and annual_prod < 1000:
         logger.warning("Study %d: annual_production=%.1f oz looks like koz, multiplying by 1000",
                         study_id, annual_prod)
         annual_prod = annual_prod * 1000
+
+    # Silver DFSs report production in Moz; the math needs absolute oz. Any
+    # silver figure < 1000 is Moz (no mine produces sub-1000 oz/yr) -> x1e6.
+    if commodity == "Ag" and annual_prod is not None and annual_prod < 1000:
+        logger.warning("Study %d: annual_production=%.3f oz looks like Moz, multiplying by 1e6",
+                        study_id, annual_prod)
+        annual_prod = annual_prod * 1_000_000
 
     # Extract DFS price assumption for primary commodity
     price_deck = json.loads(study["assumed_price_deck"] or "[]")

@@ -181,6 +181,39 @@ def test_revalue_study_end_to_end_au(mock_yahoo, test_db):
     assert abs(row["npv_uplift"] - 2443.00) < 1.0
 
 
+# ── Silver Moz auto-correction ────────────────────────────────────
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_study_silver_moz_scaled(mock_yahoo, test_db):
+    """Silver production reported in Moz (5.0) must be scaled to absolute oz."""
+    test_db.execute("UPDATE project_commodities SET commodity = 'Ag' WHERE project_id = 1")
+    test_db.commit()
+
+    price_deck = json.dumps([{"commodity": "Ag", "price": 30.0, "unit": "USD/oz"}])
+    test_db.execute("""
+        INSERT INTO studies (
+            project_id, study_stage, study_date,
+            mine_life_years, annual_production, recovery_pct,
+            post_tax_npv, discount_rate_pct, tax_rate_pct,
+            assumed_price_deck, reporting_currency
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (1, "DFS", "2024-06-15", 10.0, 5.0, 90.0, 200.0, 5.0, 30.0, price_deck, "USD"))
+    test_db.commit()
+    study_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    mock_yahoo.side_effect = lambda s: Decimal("75") if s == "SI=F" else (_ for _ in ()).throw(ValueError(s))
+
+    reval_id = revalue_study(test_db, study_id)
+    assert reval_id is not None
+    row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (reval_id,)).fetchone()
+    # 5.0 Moz -> 5,000,000 oz scaled
+    assert row["annual_production"] == 5_000_000.0
+    # ΔNPV_USD = 5e6 * (75-30) * 7.7217 * 0.70 / 1e6 = 1216.17 USD M; NPV_spot = 200 + 1216.17
+    assert abs(row["npv_spot"] - 1416.17) < 1.0
+    assert row["npv_uplift_pct"] > 5.0
+
+
 # ── Commodity skip ────────────────────────────────────────────────
 
 

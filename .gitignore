@@ -2,6 +2,8 @@ data/raw/
 data/staging.db
 db/quantyc.db
 db/_documents_backup.json
+*.db
+backups/
 .env
 specs/
 CLAUDE.md

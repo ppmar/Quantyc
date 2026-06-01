@@ -61,6 +61,19 @@ class TestPortfolioCompanies:
         for c in data["companies"]:
             assert c["has_recent_study"] is True
 
+    def test_study_after_includes_on_or_after(self, client):
+        # DEG's study is dated 2024-08-15; cutoff before it -> included.
+        resp = client.get("/api/portfolio/companies?study_after=2024-01-01")
+        data = resp.get_json()
+        assert data["filters_applied"]["study_after"] == "2024-01-01"
+        assert "DEG" in [c["ticker"] for c in data["companies"]]
+
+    def test_study_after_excludes_before_cutoff(self, client):
+        # Cutoff after DEG's 2024-08-15 study -> excluded.
+        resp = client.get("/api/portfolio/companies?study_after=2025-01-01")
+        data = resp.get_json()
+        assert "DEG" not in [c["ticker"] for c in data["companies"]]
+
     def test_excludes_companies_with_no_active_projects(self, client):
         resp = client.get("/api/portfolio/companies")
         data = resp.get_json()

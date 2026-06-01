@@ -156,6 +156,7 @@ def portfolio_companies():
     commodity = request.args.get("commodity")
     country = request.args.get("country")
     recent_study = request.args.get("has_recent_study", "false").lower() == "true"
+    study_after = request.args.get("study_after")  # ISO date 'YYYY-MM-DD'
     sort_key = request.args.get("sort", "most_advanced_stage_desc")
     limit = min(int(request.args.get("limit", "200")), 500)
 
@@ -172,6 +173,11 @@ def portfolio_companies():
         companies = [c for c in companies if country in c["countries"]]
     if recent_study:
         companies = [c for c in companies if c["has_recent_study"]]
+    if study_after:
+        companies = [
+            c for c in companies
+            if c["latest_study_date"] and c["latest_study_date"] >= study_after
+        ]
 
     # Sort
     if sort_key == "most_advanced_stage_desc":
@@ -191,6 +197,7 @@ def portfolio_companies():
             "commodity": commodity,
             "country": country,
             "has_recent_study": recent_study,
+            "study_after": study_after,
             "sort": sort_key,
             "limit": limit,
         },

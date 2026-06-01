@@ -202,7 +202,7 @@ export default function CompaniesPage() {
   const [commodity, setCommodity] = useState("");
   const [minStage, setMinStage] = useState("");
   const [singleProject, setSingleProject] = useState(false);
-  const [recentStudy, setRecentStudy] = useState(false);
+  const [studyAfter, setStudyAfter] = useState("");
   const [sort, setSort] = useState("most_advanced_stage_desc");
 
   const fetchData = useCallback(() => {
@@ -212,7 +212,7 @@ export default function CompaniesPage() {
     if (commodity) filters.commodity = commodity;
     if (minStage) filters.min_stage = minStage;
     if (singleProject) filters.single_project_only = "true";
-    if (recentStudy) filters.has_recent_study = "true";
+    if (studyAfter) filters.study_after = studyAfter;
 
     api
       .portfolioCompanies(filters)
@@ -222,7 +222,7 @@ export default function CompaniesPage() {
         setAsOf(data.as_of);
       })
       .finally(() => setLoading(false));
-  }, [country, commodity, minStage, singleProject, recentStudy, sort]);
+  }, [country, commodity, minStage, singleProject, studyAfter, sort]);
 
   useEffect(() => {
     fetchData();
@@ -305,14 +305,28 @@ export default function CompaniesPage() {
           <option value="single">Single project only</option>
         </select>
 
-        <select
-          value={recentStudy ? "recent" : "all"}
-          onChange={(e) => setRecentStudy(e.target.value === "recent")}
-          className="h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-300 focus:outline-none focus:border-zinc-600"
+        <label
+          className="flex items-center gap-1.5 h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-500 focus-within:border-zinc-600"
+          title="Show companies with a DFS/PFS dated on or after this date"
         >
-          <option value="all">Any study date</option>
-          <option value="recent">DFS/PFS since 2024</option>
-        </select>
+          DFS/PFS after
+          <input
+            type="date"
+            value={studyAfter}
+            onChange={(e) => setStudyAfter(e.target.value)}
+            className="bg-transparent text-zinc-300 focus:outline-none [color-scheme:dark]"
+          />
+          {studyAfter && (
+            <button
+              type="button"
+              onClick={() => setStudyAfter("")}
+              aria-label="Clear study date filter"
+              className="text-zinc-500 hover:text-zinc-300"
+            >
+              ×
+            </button>
+          )}
+        </label>
 
         <select
           value={sort}

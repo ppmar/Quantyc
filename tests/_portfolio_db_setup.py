@@ -107,6 +107,32 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
             evidence_json TEXT NOT NULL,
             inferred_at TEXT NOT NULL
         );
+        CREATE TABLE revaluations (
+            revaluation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            study_id INTEGER,
+            project_id INTEGER,
+            company_id INTEGER,
+            computed_at TEXT,
+            commodity TEXT,
+            price_dfs REAL,
+            price_spot REAL,
+            price_spot_id INTEGER,
+            fx_rate REAL,
+            fx_rate_price_id INTEGER,
+            annual_production REAL,
+            annual_production_unit TEXT,
+            mine_life_years REAL,
+            discount_rate_pct REAL,
+            tax_rate_pct REAL,
+            annuity_factor REAL,
+            npv_dfs REAL,
+            npv_spot REAL,
+            npv_uplift REAL,
+            npv_uplift_pct REAL,
+            method_version TEXT,
+            warnings TEXT,
+            study_confidence_tier TEXT
+        );
     """)
 
     now = datetime.utcnow().isoformat()

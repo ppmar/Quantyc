@@ -9,6 +9,9 @@ Usage:
 """
 
 import logging
+import sqlite3
+
+from datetime import datetime, timezone
 
 from db import get_connection
 from pipeline.classify import classify, contains_standardized_form
@@ -74,11 +77,8 @@ def extract_classified() -> dict:
     stats = {"extracted": 0, "skipped": 0, "failed": 0}
 
     conn = get_connection()
-    docs = conn.execute(
-        """SELECT document_id, doc_type, url, header, ticker, announcement_date
-           FROM documents WHERE parse_status = 'classified'
-           ORDER BY announcement_date DESC"""
-    ).fetchall()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    docs = _select_extractable(conn, now_iso)
     conn.close()
 
     # Types that might contain an embedded standardized form (worth downloading to check)
@@ -93,7 +93,7 @@ def extract_classified() -> dict:
             # Direct extraction — download and parse
             pdf_bytes = fetch_pdf_bytes(url) if url.startswith("http") else None
             if not pdf_bytes:
-                _mark_failed(doc_id, "download_failed")
+                _record_failure(doc_id, "download_failed")
                 stats["failed"] += 1
                 continue
             _extract_doc(doc_id, doc_type, pdf_bytes, stats,
@@ -143,7 +143,7 @@ def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
             _mark_parsed(doc_id)
             stats["extracted"] += 1
         else:
-            _mark_failed(doc_id, "extraction_empty")
+            _record_failure(doc_id, "extraction_empty")
             stats["failed"] += 1
 
     elif doc_type == "issue_of_securities":
@@ -153,7 +153,7 @@ def _extract_doc(doc_id, doc_type, pdf_bytes, stats,
             _mark_parsed(doc_id)
             stats["extracted"] += 1
         else:
-            _mark_failed(doc_id, "extraction_empty")
+            _record_failure(doc_id, "extraction_empty")
             stats["failed"] += 1
 
     elif doc_type == "resource_update":
@@ -173,7 +173,7 @@ def _extract_study(doc_id, doc_type, pdf_bytes, ticker, announcement_date, stats
     )
 
     if not ticker or not announcement_date:
-        _mark_failed(doc_id, "missing_ticker_or_date")
+        _record_failure(doc_id, "missing_ticker_or_date")
         stats["failed"] += 1
         return
 
@@ -190,7 +190,7 @@ def _extract_study(doc_id, doc_type, pdf_bytes, ticker, announcement_date, stats
         result = parse_study(pdf_bytes, ticker=ticker, doc_id=str(doc_id),
                              announcement_date=ann_date)
     except (ExtractionError, MalformedDocumentError) as e:
-        _mark_failed(doc_id, f"study_parse_error:{e}")
+        _record_failure(doc_id, f"study_parse_error:{e}")
         stats["failed"] += 1
         return
 
@@ -317,7 +317,7 @@ def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats
     from parsers.appendix_2a import ExtractionError, MalformedDocumentError
 
     if not ticker or not announcement_date:
-        _mark_failed(doc_id, "missing_ticker_or_date")
+        _record_failure(doc_id, "missing_ticker_or_date")
         stats["failed"] += 1
         return
 
@@ -333,7 +333,7 @@ def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats
     try:
         estimate = parse(pdf_bytes, ticker=ticker, doc_id=str(doc_id), announcement_date=ann_date)
     except (ExtractionError, MalformedDocumentError) as e:
-        _mark_failed(doc_id, str(e))
+        _record_failure(doc_id, str(e))
         stats["failed"] += 1
         return
 
@@ -342,7 +342,7 @@ def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats
         # Look up company_id
         row = conn.execute("SELECT company_id FROM companies WHERE ticker = ?", (ticker,)).fetchone()
         if not row:
-            _mark_failed(doc_id, "company_not_found")
+            _record_failure(doc_id, "company_not_found")
             stats["failed"] += 1
             return
         company_id = row["company_id"]
@@ -394,7 +394,7 @@ def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats
         )
     except Exception as e:
         conn.rollback()
-        _mark_failed(doc_id, f"resource_persist_error:{e}")
+        _record_failure(doc_id, f"resource_persist_error:{e}")
         stats["failed"] += 1
         logger.exception("Failed to persist resource update for doc %d", doc_id)
     finally:
@@ -438,6 +438,18 @@ def _update_doc_type(doc_id: int, doc_type: str) -> None:
     conn.close()
 
 
+def _select_extractable(conn: sqlite3.Connection, now_iso: str) -> list:
+    """Docs ready to extract: freshly classified, plus retries now due."""
+    return conn.execute(
+        """SELECT document_id, doc_type, url, header, ticker, announcement_date
+           FROM documents
+           WHERE parse_status = 'classified'
+              OR (parse_status = 'retry_scheduled' AND next_retry_at <= ?)
+           ORDER BY announcement_date DESC""",
+        (now_iso,),
+    ).fetchall()
+
+
 def _mark_skipped(doc_id: int) -> None:
     conn = get_connection()
     conn.execute(
@@ -458,12 +470,34 @@ def _mark_parsed(doc_id: int) -> None:
     conn.close()
 
 
-def _mark_failed(doc_id: int, error: str) -> None:
+def _record_failure(doc_id: int, error: str) -> None:
+    """Transient failures get scheduled for backoff retry; everything else
+    (and exhausted transients) becomes a terminal 'failed'."""
+    from pipeline.failure import classify_failure, compute_next_retry, MAX_RETRIES
+
     conn = get_connection()
-    conn.execute(
-        "UPDATE documents SET parse_status = 'failed', parse_error = ? WHERE document_id = ?",
-        (error, doc_id),
-    )
+    row = conn.execute(
+        "SELECT retry_count FROM documents WHERE document_id = ?", (doc_id,)
+    ).fetchone()
+    retry_count = row["retry_count"] if row and row["retry_count"] is not None else 0
+    cls = classify_failure(error)
+
+    if cls == "transient" and retry_count < MAX_RETRIES:
+        conn.execute(
+            """UPDATE documents
+               SET parse_status='retry_scheduled', failure_class='transient',
+                   retry_count = ?, next_retry_at = ?, parse_error = ?
+               WHERE document_id = ?""",
+            (retry_count + 1, compute_next_retry(retry_count), error, doc_id),
+        )
+    else:
+        final_error = f"{error}:retries_exhausted" if cls == "transient" else error
+        conn.execute(
+            """UPDATE documents
+               SET parse_status='failed', failure_class=?, parse_error=?
+               WHERE document_id = ?""",
+            (cls, final_error, doc_id),
+        )
     conn.commit()
     conn.close()
 

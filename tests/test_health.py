@@ -54,3 +54,17 @@ def test_health_shape_and_gap(client):
     assert data["retry_queue"]["scheduled"] == 1
     assert data["retry_queue"]["due_now"] == 1
     assert any(b["count"] >= 1 for b in data["error_buckets"])
+
+
+def test_bucket_drills_into_wrapped_study_errors():
+    from api.health import _bucket
+    # study_parse_error wraps three very different causes — they must split.
+    assert _bucket("study_parse_error:llm_api_error:ClientError:429 RESOURCE_EXHAUSTED") \
+        == "study_parse_error:llm_api_error"
+    assert _bucket("study_parse_error:minimum_data_missing:requires_npv_and_initial_capex") \
+        == "study_parse_error:minimum_data_missing"
+    assert _bucket("study_parse_error:validation_error:1_errors") \
+        == "study_parse_error:validation_error"
+    # non-wrapped errors keep their plain prefix
+    assert _bucket("gate1:no_5b_marker_on_any_page") == "gate1"
+    assert _bucket(None) == "none"

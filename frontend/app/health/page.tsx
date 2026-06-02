@@ -63,6 +63,7 @@ export default function HealthPage() {
         <Card label="Retry queue (due now)" value={`${data.retry_queue.scheduled} (${data.retry_queue.due_now})`} />
         <Card label="Failed — transient" value={data.failures_by_class.transient} accent="text-amber" />
         <Card label="Failed — permanent" value={data.failures_by_class.permanent} accent="text-red-400" />
+        <Card label="Failed — unclassified (legacy)" value={data.failures_by_class.unclassified} accent="text-zinc-400" />
         <Card label="Parsed" value={data.totals.parsed} accent="text-emerald-400" />
         <Card label="Documents" value={data.totals.documents} />
       </div>

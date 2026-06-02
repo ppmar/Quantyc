@@ -11,9 +11,25 @@ bp = Blueprint("health", __name__)
 _STUDY_TYPES = ("study_dfs", "study_pfs", "study_scoping")
 
 
+# Wrapper prefixes that say nothing on their own — drill one level deeper so
+# distinct underlying causes (e.g. a 429 quota error vs a genuine
+# minimum_data_missing gap) don't collapse into one opaque bucket.
+_WRAPPER_PREFIXES = ("study_parse_error", "llm_api_error")
+
+
 def _bucket(error: str) -> str:
-    """Collapse a parse_error to a short stable prefix for grouping."""
-    return re.split(r"[:(]", error or "none")[0][:60]
+    """Collapse a parse_error to a short stable key for grouping.
+
+    For wrapper prefixes the key keeps two segments (head:inner) so the three
+    things hiding under 'study_parse_error' stay distinguishable.
+    """
+    parts = re.split(r"[:(]", error or "none")
+    head = parts[0].strip()[:60]
+    if head in _WRAPPER_PREFIXES and len(parts) > 1:
+        inner = parts[1].strip()[:40]
+        if inner:
+            return f"{head}:{inner}"
+    return head
 
 
 @bp.route("/api/health/ingest")

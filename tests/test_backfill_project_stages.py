@@ -263,3 +263,35 @@ class TestClassifyOne:
         assert inf_row is not None
         assert inf_row["stage"] == "feasibility"
         assert inf_row["reasoning"] == "Test reasoning for feasibility."
+
+
+class TestRunBackfill:
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_classifies_all_unclassified(self, mock_classify, db):
+        conn, db_path, pids = db
+        mock_classify.return_value = _mock_inference()
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            stats = backfill.run_backfill(workers=1)
+        assert stats["classified"] == 3
+        assert stats["stage_counts"].get("feasibility") == 3
+
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_idempotent_second_run_classifies_nothing(self, mock_classify, db):
+        conn, db_path, pids = db
+        mock_classify.return_value = _mock_inference()
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            backfill.run_backfill(workers=1)
+            stats2 = backfill.run_backfill(workers=1)
+        assert stats2["classified"] == 0
+
+    def test_fetch_excludes_insufficient_evidence(self, db):
+        conn, db_path, pids = db
+        conn.execute(
+            "UPDATE projects SET stage_source='insufficient_evidence' WHERE project_id=?",
+            (pids[2],),
+        )
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            default = backfill._fetch_projects(None, False, None)
+            allp = backfill._fetch_projects(None, True, None)
+        assert pids[2] not in [p["project_id"] for p in default]
+        assert pids[2] in [p["project_id"] for p in allp]

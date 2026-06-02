@@ -76,6 +76,7 @@ def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -
             WHERE (p.stage IS NULL
                OR p.stage_source = 'ozmin'
                OR p.stage_source IS NULL)
+              AND COALESCE(p.stage_source, '') != 'insufficient_evidence'
         """
         params = []
 
@@ -295,6 +296,60 @@ def _classify_one(project: dict, dry_run: bool) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def run_backfill(ticker=None, classify_all=False, limit=None,
+                 workers=4, dry_run=False) -> dict:
+    """Fetch unclassified projects, classify each via Gemini, persist results.
+
+    Reusable by the CLI, the /api/backfill-stages endpoint, and the orchestrator.
+    Returns a stats dict. Idempotent: default mode only touches projects whose
+    stage is unset (or ozmin-sourced), and skips gemini-cached ones with no new
+    evidence.
+    """
+    projects = _fetch_projects(ticker, classify_all, limit)
+    logger.info("Found %d projects to process", len(projects))
+
+    if not classify_all:
+        before = len(projects)
+        projects = [p for p in projects if not _should_skip_cached(p)]
+        cached = before - len(projects)
+        if cached:
+            logger.info("Skipped %d cached (no new evidence)", cached)
+
+    stats = {"classified": 0, "insufficient": 0, "error": 0, "dry_run": 0,
+             "cached": 0, "stage_counts": {}, "confidence_counts": {}}
+    if not projects:
+        logger.info("Nothing to classify")
+        return stats
+
+    stage_counts = stats["stage_counts"]
+    confidence_counts = stats["confidence_counts"]
+
+    def _tally(result):
+        stats[result["status"]] = stats.get(result["status"], 0) + 1
+        if result.get("stage"):
+            stage_counts[result["stage"]] = stage_counts.get(result["stage"], 0) + 1
+        if result.get("confidence"):
+            confidence_counts[result["confidence"]] = confidence_counts.get(result["confidence"], 0) + 1
+
+    if dry_run or workers <= 1:
+        for p in projects:
+            _tally(_classify_one(p, dry_run))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {}
+            for p in projects:
+                time.sleep(0.05)  # jitter to avoid rate-limit bursts
+                futures[executor.submit(_classify_one, p, dry_run)] = p
+            for f in as_completed(futures):
+                try:
+                    _tally(f.result())
+                except Exception as e:
+                    logger.error("Worker error for %s: %s", futures[f]["project_name"], e)
+                    stats["error"] += 1
+
+    return stats
+
+
 def main():
     parser = argparse.ArgumentParser(description="Backfill project stages via Gemini classifier")
     parser.add_argument("--ticker", help="Restrict to one company ticker")
@@ -307,54 +362,11 @@ def main():
     init_db()
     _apply_migrations()
 
-    projects = _fetch_projects(args.ticker, args.all, args.limit)
-    logger.info("Found %d projects to process", len(projects))
+    stats = run_backfill(
+        ticker=args.ticker, classify_all=args.all, limit=args.limit,
+        workers=args.workers, dry_run=args.dry_run,
+    )
 
-    if not args.all:
-        before = len(projects)
-        projects = [p for p in projects if not _should_skip_cached(p)]
-        cached = before - len(projects)
-        if cached:
-            logger.info("Skipped %d cached (no new evidence)", cached)
-
-    if not projects:
-        logger.info("Nothing to classify")
-        return
-
-    stats = {"classified": 0, "insufficient": 0, "error": 0, "dry_run": 0, "cached": 0}
-    stage_counts: dict[str, int] = {}
-    confidence_counts: dict[str, int] = {}
-
-    if args.dry_run or args.workers <= 1:
-        for p in projects:
-            result = _classify_one(p, args.dry_run)
-            stats[result["status"]] = stats.get(result["status"], 0) + 1
-            if result.get("stage"):
-                stage_counts[result["stage"]] = stage_counts.get(result["stage"], 0) + 1
-            if result.get("confidence"):
-                confidence_counts[result["confidence"]] = confidence_counts.get(result["confidence"], 0) + 1
-    else:
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {}
-            for p in projects:
-                # Jitter to avoid rate-limit bursts
-                time.sleep(0.05)
-                f = executor.submit(_classify_one, p, args.dry_run)
-                futures[f] = p
-
-            for f in as_completed(futures):
-                try:
-                    result = f.result()
-                    stats[result["status"]] = stats.get(result["status"], 0) + 1
-                    if result.get("stage"):
-                        stage_counts[result["stage"]] = stage_counts.get(result["stage"], 0) + 1
-                    if result.get("confidence"):
-                        confidence_counts[result["confidence"]] = confidence_counts.get(result["confidence"], 0) + 1
-                except Exception as e:
-                    logger.error("Worker error for %s: %s", futures[f]["project_name"], e)
-                    stats["error"] += 1
-
-    # Summary
     logger.info("=" * 50)
     logger.info("BACKFILL SUMMARY")
     logger.info("  Classified: %d", stats["classified"])
@@ -362,10 +374,10 @@ def main():
     logger.info("  Errors: %d", stats["error"])
     if stats["dry_run"]:
         logger.info("  Dry-run: %d", stats["dry_run"])
-    if stage_counts:
-        logger.info("  By stage: %s", stage_counts)
-    if confidence_counts:
-        logger.info("  By confidence: %s", confidence_counts)
+    if stats["stage_counts"]:
+        logger.info("  By stage: %s", stats["stage_counts"])
+    if stats["confidence_counts"]:
+        logger.info("  By confidence: %s", stats["confidence_counts"])
 
 
 if __name__ == "__main__":

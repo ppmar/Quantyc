@@ -207,6 +207,7 @@ export default function CompaniesPage() {
   const [singleProject, setSingleProject] = useState(false);
   const [studyAfter, setStudyAfter] = useState("");
   const [supportedOnly, setSupportedOnly] = useState(true);
+  const [hideEmpty, setHideEmpty] = useState(false);
   const [sort, setSort] = useState("most_advanced_stage_desc");
 
   const fetchData = useCallback(() => {
@@ -232,6 +233,11 @@ export default function CompaniesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Client-side display filter: optionally hide companies with no study projects.
+  const visibleCompanies = hideEmpty
+    ? companies.filter((c) => c.study_project_count > 0)
+    : companies;
 
   // Derive unique countries / commodities from data for dropdowns
   const allCountries = [
@@ -314,6 +320,19 @@ export default function CompaniesPage() {
           Au/Ag/Cu + DFS/PFS
         </label>
 
+        <label
+          className="flex items-center gap-1.5 h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-300 cursor-pointer select-none"
+          title="Hide companies with no DFS/PFS study projects"
+        >
+          <input
+            type="checkbox"
+            checked={hideEmpty}
+            onChange={(e) => setHideEmpty(e.target.checked)}
+            className="accent-zinc-400"
+          />
+          Hide 0-project
+        </label>
+
         <select
           value={singleProject ? "single" : "all"}
           onChange={(e) => setSingleProject(e.target.value === "single")}
@@ -359,7 +378,7 @@ export default function CompaniesPage() {
 
       {/* Result count */}
       <p className="text-[12px] text-zinc-500 text-right">
-        {companies.length} companies match
+        {visibleCompanies.length} companies match
       </p>
 
       {/* Loading */}
@@ -398,7 +417,7 @@ export default function CompaniesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {companies.map((c) => (
+              {visibleCompanies.map((c) => (
                 <Fragment key={c.ticker}>
                   <tr
                     className="hover:bg-white/[0.02] transition-colors cursor-pointer"
@@ -473,7 +492,7 @@ export default function CompaniesPage() {
                   )}
                 </Fragment>
               ))}
-              {companies.length === 0 && (
+              {visibleCompanies.length === 0 && (
                 <tr>
                   <td
                     colSpan={9}

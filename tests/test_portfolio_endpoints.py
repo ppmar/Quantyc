@@ -105,6 +105,18 @@ class TestPortfolioCompanies:
         assert deg is not None
         assert deg["most_advanced_stage"] == "feasibility"
 
+    def test_min_stage_includes_more_advanced(self, client):
+        resp = client.get("/api/portfolio/companies?min_stage=feasibility")
+        tickers = [c["ticker"] for c in resp.get_json()["companies"]]
+        assert "PRD" in tickers       # production — more advanced
+        assert "DEG" in tickers       # feasibility — exact
+        assert "EXP" not in tickers   # exploration — less advanced
+
+    def test_min_stage_exploration_includes_all(self, client):
+        resp = client.get("/api/portfolio/companies?min_stage=exploration")
+        tickers = [c["ticker"] for c in resp.get_json()["companies"]]
+        assert {"PRD", "DEG", "EXP"}.issubset(set(tickers))
+
 
 class TestPortfolioCompanyDetail:
     def test_returns_projects(self, client):

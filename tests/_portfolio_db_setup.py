@@ -217,5 +217,45 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
         (brine_id, "DFS", "definitive", "2024-09-01", 500.0, "AUD"),
     )
 
+    # Company: PRD (production — more advanced than feasibility)
+    conn.execute(
+        "INSERT INTO companies (ticker, name, first_seen_at, last_updated_at) VALUES (?, ?, ?, ?)",
+        ("PRD", "Producer Co", now, now),
+    )
+    prd_id = conn.execute("SELECT company_id FROM companies WHERE ticker='PRD'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO projects (company_id, project_name, country, stage, created_at) VALUES (?, ?, ?, ?, ?)",
+        (prd_id, "BigMine", "Australia", "production", now),
+    )
+    bigmine_id = conn.execute("SELECT project_id FROM projects WHERE project_name='BigMine'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, ?, 1)",
+        (bigmine_id, "Au"),
+    )
+    conn.execute(
+        "INSERT INTO resources (project_id, effective_date, commodity, resource_or_reserve, category, tonnes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (bigmine_id, "2024-01-01", "Au", "Reserve", "Proved", 10000000, now),
+    )
+
+    # Company: EXP (exploration — less advanced than feasibility)
+    conn.execute(
+        "INSERT INTO companies (ticker, name, first_seen_at, last_updated_at) VALUES (?, ?, ?, ?)",
+        ("EXP", "Explorer Co", now, now),
+    )
+    exp_id = conn.execute("SELECT company_id FROM companies WHERE ticker='EXP'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO projects (company_id, project_name, country, stage, created_at) VALUES (?, ?, ?, ?, ?)",
+        (exp_id, "Greenfield", "Australia", "exploration", now),
+    )
+    green_id = conn.execute("SELECT project_id FROM projects WHERE project_name='Greenfield'").fetchone()[0]
+    conn.execute(
+        "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, ?, 1)",
+        (green_id, "Au"),
+    )
+    conn.execute(
+        "INSERT INTO resources (project_id, effective_date, commodity, resource_or_reserve, category, tonnes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (green_id, "2024-01-01", "Au", "Resource", "Inferred", 5000000, now),
+    )
+
     conn.commit()
     return conn

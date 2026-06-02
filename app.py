@@ -37,6 +37,9 @@ pipeline_status = {
     "failed_count": 0,
 }
 
+# Guard so a second backfill POST while one is running is a no-op.
+_stage_backfill_running = False
+
 app = Flask(__name__)
 CORS(app)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key-change-in-prod")
@@ -141,6 +144,29 @@ def api_retry_failed():
     conn.close()
     _start_orchestrate()
     return jsonify({"reset": reset, "orchestrate": "started"})
+
+
+@app.route("/api/backfill-stages", methods=["POST"])
+def api_backfill_stages():
+    """Classify unset project stages via Gemini, in the background. Idempotent."""
+    global _stage_backfill_running
+    if _stage_backfill_running:
+        return jsonify({"status": "already_running"})
+    _stage_backfill_running = True
+
+    def _run():
+        global _stage_backfill_running
+        try:
+            from scripts.backfill_project_stages import run_backfill
+            stats = run_backfill(classify_all=False)
+            logger.info("Stage backfill done: %s", stats)
+        except Exception:
+            logger.error("Stage backfill failed:\n%s", traceback.format_exc())
+        finally:
+            _stage_backfill_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "started"})
 
 
 def _start_ingest(tickers, count):

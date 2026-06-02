@@ -503,8 +503,18 @@ def _record_failure(doc_id: int, error: str) -> None:
 
 
 def run_orchestrator() -> dict:
-    """Full pipeline run: classify → extract → normalize."""
+    """Full pipeline run: classify → extract → classify project stages."""
     classified = classify_pending()
     stats = extract_classified()
     stats["classified"] = classified
+
+    # Self-maintaining stage inference for newly-ingested projects.
+    # Best-effort: a classifier/quota failure must not break extraction.
+    stats["stage_backfill"] = None
+    try:
+        from scripts.backfill_project_stages import run_backfill
+        stats["stage_backfill"] = run_backfill(classify_all=False)
+    except Exception as e:
+        logger.warning("Stage backfill during orchestration failed: %s", e)
+
     return stats

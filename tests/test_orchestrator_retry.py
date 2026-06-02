@@ -105,3 +105,26 @@ def test_transient_retry_count_increments_mid_sequence(db_conn):
     assert row["parse_status"] == "retry_scheduled"
     assert row["retry_count"] == 3
     assert row["failure_class"] == "transient"
+
+
+def test_run_orchestrator_invokes_stage_backfill():
+    from unittest.mock import patch
+    import pipeline.orchestrator as orch
+    with patch.object(orch, "classify_pending", return_value=0), \
+         patch.object(orch, "extract_classified", return_value={"extracted": 0}), \
+         patch("scripts.backfill_project_stages.run_backfill",
+               return_value={"classified": 2}) as mock_bf:
+        stats = orch.run_orchestrator()
+    mock_bf.assert_called_once()
+    assert stats["stage_backfill"] == {"classified": 2}
+
+
+def test_run_orchestrator_survives_backfill_failure():
+    from unittest.mock import patch
+    import pipeline.orchestrator as orch
+    with patch.object(orch, "classify_pending", return_value=0), \
+         patch.object(orch, "extract_classified", return_value={"extracted": 0}), \
+         patch("scripts.backfill_project_stages.run_backfill",
+               side_effect=RuntimeError("gemini down")):
+        stats = orch.run_orchestrator()  # must not raise
+    assert stats["stage_backfill"] is None

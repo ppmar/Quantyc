@@ -211,6 +211,22 @@ export interface PriceComparisonResponse {
   error?: string;
 }
 
+export interface IngestHealth {
+  totals: {
+    documents: number; parsed: number; failed: number;
+    retry_scheduled: number; classified: number; pending: number; skipped: number;
+  };
+  failures_by_class: { transient: number; permanent: number; unclassified: number };
+  retry_queue: { scheduled: number; due_now: number; next_at: string | null };
+  study_coverage: {
+    companies_with_study_doc: number;
+    companies_with_parsed_study: number;
+    recoverable_gap: number;
+  };
+  error_buckets: { reason: string; doc_type: string; count: number }[];
+  as_of: string;
+}
+
 export const api = {
   stats: () => fetchAPI<Stats>("/api/stats"),
   companies: () => fetchAPI<Company[]>("/api/companies"),
@@ -235,6 +251,11 @@ export const api = {
   orchestrate: () =>
     fetch(`${API_BASE}/api/orchestrate`, { method: "POST" }).then((r) =>
       r.json()
+    ),
+  healthIngest: () => fetchAPI<IngestHealth>("/api/health/ingest"),
+  retryFailed: () =>
+    fetch(`${API_BASE}/api/orchestrate/retry-failed`, { method: "POST" }).then(
+      (r) => r.json()
     ),
   snapshot: (ticker: string) =>
     fetchAPI<import("@/types/snapshot").CompanySnapshot>(

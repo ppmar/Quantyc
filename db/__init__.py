@@ -46,6 +46,10 @@ def _safe_add_columns(conn):
         # 0007 migration's revaluations ALTER never lands on DBs where the
         # studies ALTER already ran (executescript aborts on duplicate column).
         ("revaluations", "study_confidence_tier", "TEXT"),
+        # Self-healing retry state for the extraction pipeline.
+        ("documents", "failure_class", "TEXT"),
+        ("documents", "retry_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("documents", "next_retry_at", "TEXT"),
     ]
     for table, col, col_type in additions:
         try:

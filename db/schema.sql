@@ -15,9 +15,12 @@ CREATE TABLE IF NOT EXISTS documents (
     doc_type           TEXT,                       -- classified type
     header             TEXT,                       -- announcement headline
     parse_status       TEXT    NOT NULL DEFAULT 'pending',
-                                                   -- pending|classified|parsed|failed|skipped
+                                                   -- pending|classified|parsed|failed|skipped|retry_scheduled
     parse_error        TEXT,
-    local_path         TEXT    NOT NULL DEFAULT '' -- always empty, stateless
+    local_path         TEXT    NOT NULL DEFAULT '', -- always empty, stateless
+    failure_class      TEXT,                        -- transient|permanent|NULL
+    retry_count        INTEGER NOT NULL DEFAULT 0,
+    next_retry_at      TEXT                         -- ISO-8601 UTC, NULL when not queued
 );
 CREATE INDEX IF NOT EXISTS idx_documents_ticker ON documents(ticker);
 CREATE INDEX IF NOT EXISTS idx_documents_type   ON documents(doc_type);

@@ -87,7 +87,13 @@ def portfolio_companies():
                    JOIN projects pp ON pp.project_id = st.project_id
                    WHERE pp.company_id = c.company_id
                      AND st.study_confidence_tier IN ('definitive', 'indicative')
-               ) AS has_dfs_pfs
+               ) AS has_dfs_pfs,
+               (
+                   SELECT COUNT(DISTINCT s2.project_id)
+                   FROM studies s2
+                   JOIN projects p2 ON p2.project_id = s2.project_id
+                   WHERE p2.company_id = c.company_id
+               ) AS study_project_count
         FROM companies c
         LEFT JOIN active_projects ap ON ap.company_id = c.company_id
         LEFT JOIN latest_study ls ON ls.project_id = ap.project_id AND ls.rn = 1
@@ -142,6 +148,7 @@ def portfolio_companies():
             "ticker": r["ticker"],
             "company_name": r["company_name"],
             "active_project_count": active_count,
+            "study_project_count": r["study_project_count"] or 0,
             "total_project_count": r["total_project_count"],
             "is_single_project": active_count == 1,
             "most_advanced_stage": most_advanced,

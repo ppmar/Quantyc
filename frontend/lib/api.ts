@@ -111,6 +111,7 @@ export interface PortfolioCompany {
   ticker: string;
   company_name: string | null;
   active_project_count: number;
+  study_project_count: number;
   total_project_count: number;
   is_single_project: boolean;
   most_advanced_stage: ProjectStage | null;

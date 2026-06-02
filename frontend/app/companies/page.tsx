@@ -124,11 +124,14 @@ function ExpandedRow({ ticker }: { ticker: string }) {
     );
   }
 
-  if (!detail || detail.projects.length === 0) {
+  // Match the "Projects" count + Operations tab: only projects with a study.
+  const studyProjects = (detail?.projects ?? []).filter((p) => p.latest_study);
+
+  if (!detail || studyProjects.length === 0) {
     return (
       <tr>
         <td colSpan={9} className="px-6 py-4 text-zinc-600 text-[13px]">
-          No project data available.
+          No DFS/PFS study projects on file.
         </td>
       </tr>
     );
@@ -136,7 +139,7 @@ function ExpandedRow({ ticker }: { ticker: string }) {
 
   return (
     <>
-      {detail.projects.map((p) => (
+      {studyProjects.map((p) => (
         <tr
           key={p.project_name}
           className="bg-zinc-900/40 border-b border-white/[0.03]"
@@ -419,7 +422,7 @@ export default function CompaniesPage() {
                     </td>
                     <td className="px-3 py-2 font-mono text-[13px] text-zinc-400">
                       <span className="inline-flex items-center gap-1.5">
-                        {c.active_project_count}
+                        {c.study_project_count}
                         {c.is_single_project && (
                           <span
                             className="w-1.5 h-1.5 rounded-full bg-amber inline-block"

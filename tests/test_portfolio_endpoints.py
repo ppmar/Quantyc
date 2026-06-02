@@ -92,6 +92,16 @@ class TestPortfolioCompanies:
         deg = next(c for c in resp.get_json()["companies"] if c["ticker"] == "DEG")
         assert deg["has_dfs_pfs"] is True
 
+    def test_study_project_count_counts_only_projects_with_a_study(self, client):
+        resp = client.get("/api/portfolio/companies")
+        companies = {c["ticker"]: c for c in resp.get_json()["companies"]}
+        # DEG/Hemi has a study → 1
+        assert companies["DEG"]["study_project_count"] == 1
+        # PRD/BigMine is resource-only (active, listed) but has no study → 0
+        assert companies["PRD"]["study_project_count"] == 0
+        # resource-only company is still listed (active_project_count keeps it)
+        assert companies["PRD"]["active_project_count"] >= 1
+
     def test_excludes_companies_with_no_active_projects(self, client):
         resp = client.get("/api/portfolio/companies")
         data = resp.get_json()

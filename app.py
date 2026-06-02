@@ -63,6 +63,7 @@ from api.snapshot import bp as snapshot_bp
 from api.portfolio import bp as portfolio_bp
 from api.revalue import bp as revalue_bp
 from api.comparison import bp as comparison_bp
+from api.health import bp as health_bp
 
 app.register_blueprint(upload_bp)
 app.register_blueprint(documents_bp)
@@ -72,6 +73,7 @@ app.register_blueprint(snapshot_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(revalue_bp)
 app.register_blueprint(comparison_bp)
+app.register_blueprint(health_bp)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,31 @@ def api_orchestrate():
     """Run the orchestrator on all pending/classified docs."""
     _start_orchestrate()
     return jsonify({"status": "started"})
+
+
+@app.route("/api/orchestrate/retry-failed", methods=["POST"])
+def api_retry_failed():
+    """Flip transient study failures back to retry_scheduled, then kick the
+    orchestrator. One-shot recovery for the docs killed by the Gemini cap."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    cur = conn.execute(
+        """UPDATE documents
+              SET parse_status='retry_scheduled', next_retry_at=?,
+                  failure_class='transient', retry_count=0
+            WHERE parse_status='failed'
+              AND doc_type IN ('study_dfs','study_pfs','study_scoping')
+              AND (parse_error LIKE '%RESOURCE_EXHAUSTED%' OR parse_error LIKE '%429%'
+                   OR parse_error LIKE '%timeout%' OR parse_error LIKE '%503%'
+                   OR parse_error LIKE '%overloaded%')""",
+        (now,),
+    )
+    reset = cur.rowcount
+    conn.commit()
+    conn.close()
+    _start_orchestrate()
+    return jsonify({"reset": reset, "orchestrate": "started"})
 
 
 def _start_ingest(tickers, count):

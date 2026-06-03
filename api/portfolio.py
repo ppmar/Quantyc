@@ -178,14 +178,11 @@ def portfolio_companies():
     if single_only:
         companies = [c for c in companies if c["is_single_project"]]
     if min_stage and min_stage in _STAGE_RANK:
-        # "min_stage" = this stage OR more advanced. Lower rank = more advanced
-        # (production == 0), so keep companies whose most-advanced stage ranks
-        # at or above the cutoff.
-        cutoff = _STAGE_RANK[min_stage]
+        # Exact match: picking "feasibility" returns companies whose most-advanced
+        # stage IS feasibility — not more-advanced or less-advanced ones.
         companies = [
             c for c in companies
-            if c["most_advanced_stage"] in _STAGE_RANK
-            and _STAGE_RANK[c["most_advanced_stage"]] <= cutoff
+            if c["most_advanced_stage"] == min_stage
         ]
     if commodity:
         companies = [c for c in companies if commodity in c["primary_commodities"]]

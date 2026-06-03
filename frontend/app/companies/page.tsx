@@ -256,7 +256,7 @@ export default function CompaniesPage() {
             Companies
           </p>
           <p className="text-sm text-zinc-400 mt-1">
-            Project portfolios across {totalCompanies} ASX-listed mining issuers
+            Project portfolios across {visibleCompanies.length} ASX-listed mining issuers
           </p>
         </div>
         {asOf && (

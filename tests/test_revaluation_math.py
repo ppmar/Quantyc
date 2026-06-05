@@ -7,6 +7,7 @@ from revaluation.math import (
     RevaluationInput,
     RevaluationError,
     annuity_factor,
+    remaining_life_years,
     revalue,
 )
 
@@ -90,7 +91,7 @@ def test_revalue_gold_aud_reporting():
     assert abs(result.npv_spot - Decimal("3397.74")) < Decimal("0.10")
     assert abs(result.npv_uplift - Decimal("2412.74")) < Decimal("0.10")
     assert abs(result.delta_revenue_annual_usd - Decimal("288000000")) < Decimal("1")
-    assert result.method_version == "first_order_v2"
+    assert result.method_version == "first_order_v3"
     assert result.warnings == []
 
 
@@ -300,3 +301,70 @@ def test_zero_npv_dfs_no_division_by_zero():
     result = revalue(inp)
     assert result.npv_uplift_pct == Decimal("0")
     assert result.npv_spot > 0
+
+
+# ── Remaining-life annuity (producer depletion fix) ───────────────
+
+
+def test_remaining_life_developer_is_full_life():
+    """No elapsed production => full mine life remains."""
+    assert remaining_life_years(Decimal("11"), None) == Decimal("11")
+
+
+def test_remaining_life_producer_subtracts_elapsed():
+    """vie_restante = duree - elapsed."""
+    assert remaining_life_years(Decimal("11"), Decimal("6")) == Decimal("5")
+
+
+def test_remaining_life_clamps_at_zero():
+    """A mine past its life has no remaining life, never negative."""
+    assert remaining_life_years(Decimal("11"), Decimal("13")) == Decimal("0")
+
+
+def test_remaining_life_future_start_uses_full_life():
+    """Negative elapsed (production starts after valuation date) => full life."""
+    assert remaining_life_years(Decimal("11"), Decimal("-2")) == Decimal("11")
+
+
+def _producer_input(elapsed):
+    """Sanbrado-shaped gold producer: 11y life, 211koz/yr, 5% disc."""
+    return RevaluationInput(
+        commodity="Au",
+        price_dfs_usd=Decimal("1300"),
+        price_spot_usd=Decimal("4500"),
+        annual_production=Decimal("211000"),
+        annual_production_unit="oz",
+        mine_life_years=Decimal("11"),
+        discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("31.5"),
+        npv_dfs=Decimal("405"),
+        reporting_currency="USD",
+        fx_rate=None,
+        production_elapsed_years=elapsed,
+    )
+
+
+def test_producer_remaining_life_shrinks_annuity_and_uplift():
+    """6 years into an 11y mine: annuity runs over 5y, not 11y, so the spot
+    uplift is far smaller than the full-life (buggy) figure."""
+    full = revalue(_producer_input(None))          # old behaviour: full 11y
+    depleted = revalue(_producer_input(Decimal("6")))  # fixed: 5y remaining
+
+    assert full.remaining_life_years == Decimal("11")
+    assert depleted.remaining_life_years == Decimal("5")
+    # A(5%,11)=8.3064 vs A(5%,5)=4.3295
+    assert depleted.annuity_factor == annuity_factor(Decimal("5.0"), Decimal("5"))
+    assert depleted.annuity_factor < full.annuity_factor
+    # Uplift scales with the annuity factor -> materially smaller.
+    assert depleted.npv_uplift < full.npv_uplift
+    assert any("remaining_life" in w for w in depleted.warnings)
+
+
+def test_fully_depleted_producer_has_zero_uplift():
+    """Past end of life: no go-forward ounces => no first-order uplift."""
+    result = revalue(_producer_input(Decimal("12")))
+    assert result.remaining_life_years == Decimal("0")
+    assert result.annuity_factor == Decimal("0.0000")
+    assert result.npv_uplift == Decimal("0.00")
+    assert result.npv_spot == result.npv_dfs
+    assert "mine_depleted_no_remaining_life" in result.warnings

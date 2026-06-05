@@ -418,7 +418,8 @@ def api_company_snapshot(ticker: str):
                       recovery_pct, initial_capex, sustaining_capex, opex,
                       post_tax_npv, pre_tax_npv, irr_pct, payback_years,
                       aisc_per_unit, aisc_unit, assumed_price_deck, assumed_fx,
-                      reporting_currency, discount_rate_pct, extraction_model
+                      reporting_currency, discount_rate_pct, extraction_model,
+                      needs_review, review_reason, extraction_warnings
                FROM studies WHERE project_id = ?
                ORDER BY study_date DESC LIMIT 1""",
             (pid,),
@@ -431,6 +432,12 @@ def api_company_snapshot(ticker: str):
             if study_row["assumed_price_deck"]:
                 try:
                     price_deck = _json.loads(study_row["assumed_price_deck"])
+                except Exception:
+                    pass
+            extraction_warnings = []
+            if study_row["extraction_warnings"]:
+                try:
+                    extraction_warnings = _json.loads(study_row["extraction_warnings"])
                 except Exception:
                     pass
             study_out = {
@@ -454,6 +461,9 @@ def api_company_snapshot(ticker: str):
                 "recovery_pct": study_row["recovery_pct"],
                 "assumed_fx": study_row["assumed_fx"],
                 "price_assumptions": price_deck,
+                "needs_review": bool(study_row["needs_review"]),
+                "review_reason": study_row["review_reason"],
+                "extraction_warnings": extraction_warnings,
             }
 
         # Latest revaluation for this project

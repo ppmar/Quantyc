@@ -234,6 +234,9 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
   const ccy = reval.reporting_currency === "USD" ? "US$" : reval.reporting_currency === "AUD" ? "A$" : `${reval.reporting_currency ?? ""}$`;
   const upliftPct = reval.npv_uplift_pct;
   const priceChangePct = ((reval.price_spot - reval.price_dfs) / reval.price_dfs) * 100;
+  // A huge % on a tiny NPV base is not a strong signal — de-emphasise it (I6).
+  const lowBase = reval.npv_dfs != null && reval.npv_dfs < 50;
+  const upliftColor = lowBase ? "text-zinc-400" : signalColor(upliftPct);
 
   const spotDate = reval.spot_fetched_at
     ? new Date(reval.spot_fetched_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
@@ -248,9 +251,14 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
           </h4>
           <MethodologyHint />
         </div>
-        <span className={`text-lg font-semibold tabular-nums ${signalColor(upliftPct)}`}>
-          {upliftPct >= 0 ? "+" : ""}{(upliftPct * 100).toFixed(0)}%
-        </span>
+        <div className="flex items-center gap-1.5">
+          {lowBase && (
+            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">small base</span>
+          )}
+          <span className={`text-lg font-semibold tabular-nums ${upliftColor}`}>
+            {upliftPct >= 0 ? "+" : ""}{(upliftPct * 100).toFixed(0)}%
+          </span>
+        </div>
       </div>
 
       {/* Price comparison */}
@@ -284,7 +292,7 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
         </div>
         <div>
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Uplift</p>
-          <p className={`text-sm font-medium tabular-nums ${signalColor(upliftPct)}`}>
+          <p className={`text-sm font-medium tabular-nums ${upliftColor}`}>
             {reval.npv_uplift >= 0 ? "+" : ""}{ccy}{reval.npv_uplift.toLocaleString(undefined, { maximumFractionDigits: 0 })}M
           </p>
         </div>

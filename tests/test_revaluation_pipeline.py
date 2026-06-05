@@ -34,6 +34,7 @@ def test_db():
             state TEXT,
             stage TEXT,
             ownership_pct REAL,
+            production_start_date TEXT,
             created_at TEXT NOT NULL
         );
         CREATE TABLE project_commodities (
@@ -92,6 +93,7 @@ def test_db():
             annual_production REAL NOT NULL,
             annual_production_unit TEXT NOT NULL,
             mine_life_years REAL NOT NULL,
+            remaining_life_years REAL,
             discount_rate_pct REAL NOT NULL,
             tax_rate_pct REAL NOT NULL,
             annuity_factor REAL NOT NULL,
@@ -169,7 +171,7 @@ def test_revalue_study_end_to_end_au(mock_yahoo, test_db):
     assert row["commodity"] == "Au"
     assert row["price_dfs"] == 1900.0
     assert row["price_spot"] == 3520.0
-    assert row["method_version"] == "first_order_v2"
+    assert row["method_version"] == "first_order_v3"
     assert row["npv_spot"] > row["npv_dfs"]
     assert row["npv_uplift"] > 0
     assert row["npv_uplift_pct"] > 0

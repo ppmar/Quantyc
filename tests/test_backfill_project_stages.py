@@ -91,6 +91,7 @@ def db(tmp_path):
             document_id INTEGER REFERENCES documents(document_id),
             study_stage TEXT,
             study_date TEXT,
+            study_confidence_tier TEXT,
             created_at TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE resources (
@@ -145,8 +146,8 @@ def db(tmp_path):
     )
     doc_id = conn.execute("SELECT document_id FROM documents LIMIT 1").fetchone()[0]
     conn.execute(
-        "INSERT INTO studies (project_id, document_id, study_stage, study_date, created_at) VALUES (?, ?, ?, ?, ?)",
-        (pids[0], doc_id, "DFS", "2024-08-15", now),
+        "INSERT INTO studies (project_id, document_id, study_stage, study_date, study_confidence_tier, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (pids[0], doc_id, "DFS", "2024-08-15", "definitive", now),
     )
 
     # Seed a resource for Mallina
@@ -295,3 +296,68 @@ class TestRunBackfill:
             allp = backfill._fetch_projects(None, True, None)
         assert pids[2] not in [p["project_id"] for p in default]
         assert pids[2] in [p["project_id"] for p in allp]
+
+
+class TestStudyFloor:
+    """PR1: a definitive/indicative study floors the project to >= feasibility,
+    regardless of what the LLM returns. Floor never downgrades, audit keeps raw LLM."""
+
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_floor_lifts_unknown_to_feasibility(self, mock_classify, db):
+        # RMX/Batangas case: DFS present, classifier returns unknown.
+        conn, db_path, pids = db
+        mock_classify.return_value = _mock_inference(stage="unknown", region=None)
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            project = dict(conn.execute(
+                "SELECT p.*, c.ticker FROM projects p JOIN companies c ON c.company_id = p.company_id WHERE p.project_id = ?",
+                (pids[0],),  # Hemi — has definitive study
+            ).fetchone())
+            backfill._classify_one(project, dry_run=False)
+
+        row = conn.execute(
+            "SELECT stage, stage_source FROM projects WHERE project_id = ?", (pids[0],)
+        ).fetchone()
+        assert row["stage"] == "feasibility"
+        assert row["stage_source"] == "study_floor"
+
+        # Audit row preserves the RAW LLM stage.
+        inf = conn.execute(
+            "SELECT stage FROM project_stage_inferences WHERE project_id = ? ORDER BY id DESC LIMIT 1",
+            (pids[0],),
+        ).fetchone()
+        assert inf["stage"] == "unknown"
+
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_floor_never_downgrades_production(self, mock_classify, db):
+        conn, db_path, pids = db
+        mock_classify.return_value = _mock_inference(stage="production", region=None)
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            project = dict(conn.execute(
+                "SELECT p.*, c.ticker FROM projects p JOIN companies c ON c.company_id = p.company_id WHERE p.project_id = ?",
+                (pids[0],),
+            ).fetchone())
+            backfill._classify_one(project, dry_run=False)
+
+        row = conn.execute(
+            "SELECT stage, stage_source FROM projects WHERE project_id = ?", (pids[0],)
+        ).fetchone()
+        assert row["stage"] == "production"
+        assert row["stage_source"] == "gemini_inferred"  # floor did not win
+
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_insufficient_evidence_still_floors_when_study_exists(self, mock_classify, db):
+        # Classifier gives nothing, but the project has a definitive study.
+        conn, db_path, pids = db
+        mock_classify.side_effect = InsufficientEvidenceError("no signal")
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            project = dict(conn.execute(
+                "SELECT p.*, c.ticker FROM projects p JOIN companies c ON c.company_id = p.company_id WHERE p.project_id = ?",
+                (pids[0],),  # Hemi — has definitive study
+            ).fetchone())
+            backfill._classify_one(project, dry_run=False)
+
+        row = conn.execute(
+            "SELECT stage, stage_source FROM projects WHERE project_id = ?", (pids[0],)
+        ).fetchone()
+        assert row["stage"] == "feasibility"
+        assert row["stage_source"] == "study_floor"

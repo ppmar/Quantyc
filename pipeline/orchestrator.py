@@ -226,6 +226,39 @@ def _extract_study(doc_id, doc_type, pdf_bytes, ticker, announcement_date, stats
             logger.warning("Auto-revaluation failed for study %d: %s", study_id, e)
 
 
+# Plausible band for the implied effective-tax gap (1 - post_tax/pre_tax) on a
+# real study. Outside this, one of the NPVs is likely mislabelled (e.g. the LLM
+# grabbed two pre-tax figures at different price cases). Gold studies cluster ~27-30%.
+_TAX_GAP_MIN = 0.20
+_TAX_GAP_MAX = 0.45
+
+
+def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct):
+    """Return (needs_review: bool, review_reason: str|None) for a study's economics.
+
+    Flags (mirrors company_financials._check_review_flags — surfaces, never blocks):
+      - missing_pre_tax_npv / missing_post_tax_npv  (revaluation needs post-tax)
+      - post_tax_npv_ge_pre_tax_npv                 (inverted/equal — tax can't add value)
+      - implied_tax_gap_<pct>_out_of_band           (one NPV likely mislabelled)
+      - missing_tax_rate                            (revaluation silently defaults to 30%)
+    """
+    reasons = []
+    if pre_tax_npv is None:
+        reasons.append("missing_pre_tax_npv")
+    if post_tax_npv is None:
+        reasons.append("missing_post_tax_npv")
+    if pre_tax_npv is not None and post_tax_npv is not None and pre_tax_npv != 0:
+        if post_tax_npv >= pre_tax_npv:
+            reasons.append("post_tax_npv_ge_pre_tax_npv")
+        else:
+            gap = 1 - (post_tax_npv / pre_tax_npv)
+            if gap < _TAX_GAP_MIN or gap > _TAX_GAP_MAX:
+                reasons.append(f"implied_tax_gap_{gap * 100:.1f}pct_out_of_band")
+    if tax_rate_pct is None:
+        reasons.append("missing_tax_rate")
+    return (len(reasons) > 0, "; ".join(reasons) if reasons else None)
+
+
 def _persist_study(doc_id, ticker, result, model_name):
     """Persist study extraction to projects (upsert) + studies (insert). Returns study_id."""
     import json as _json
@@ -265,6 +298,14 @@ def _persist_study(doc_id, ticker, result, model_name):
                         ticker, result.project_name, result.study_type, npv_val, existing_study["study_id"])
             return existing_study["study_id"]
 
+        pre_tax_val = float(result.pre_tax_npv_millions) if result.pre_tax_npv_millions else None
+        post_tax_val = float(result.post_tax_npv_millions) if result.post_tax_npv_millions else None
+        tax_rate_val = float(result.tax_rate_pct) if result.tax_rate_pct else None
+        needs_review, review_reason = check_study_review_flags(pre_tax_val, post_tax_val, tax_rate_val)
+        if needs_review:
+            logger.warning("Study for %s — %s flagged for review: %s",
+                           ticker, result.project_name, review_reason)
+
         cur = conn.execute("""
             INSERT INTO studies (
                 project_id, document_id, study_stage, study_confidence_tier, study_date,
@@ -274,8 +315,9 @@ def _persist_study(doc_id, ticker, result, model_name):
                 aisc_per_unit, aisc_unit,
                 assumed_price_deck, assumed_fx,
                 reporting_currency, discount_rate_pct, tax_rate_pct,
-                extraction_method, extraction_model
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                extraction_method, extraction_model,
+                needs_review, review_reason, extraction_warnings
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             project_id, doc_id, result.study_type, result.confidence_tier(),
             result.effective_date.isoformat() if result.effective_date else None,
@@ -285,8 +327,8 @@ def _persist_study(doc_id, ticker, result, model_name):
             float(result.initial_capex_millions) if result.initial_capex_millions else None,
             float(result.sustaining_capex_millions) if result.sustaining_capex_millions else None,
             float(result.opex_per_unit) if result.opex_per_unit else None,
-            float(result.post_tax_npv_millions) if result.post_tax_npv_millions else None,
-            float(result.pre_tax_npv_millions) if result.pre_tax_npv_millions else None,
+            post_tax_val,
+            pre_tax_val,
             float(result.irr_pct) if result.irr_pct else None,
             float(result.payback_years) if result.payback_years else None,
             float(result.aisc_per_unit) if result.aisc_per_unit else None,
@@ -295,10 +337,31 @@ def _persist_study(doc_id, ticker, result, model_name):
             float(result.fx_assumption) if result.fx_assumption else None,
             result.reporting_currency,
             float(result.discount_rate_pct),
-            float(result.tax_rate_pct) if result.tax_rate_pct else None,
+            tax_rate_val,
             "llm",
             model_name,
+            1 if needs_review else 0,
+            review_reason,
+            _json.dumps(result.extraction_warnings or []),
         ))
+
+        # Study-to-stage floor: a freshly parsed DFS/PFS lifts the project to at
+        # least feasibility immediately, without waiting for the end-of-run Gemini
+        # backfill. Floor-only — never downgrades a more-advanced stage (I1, I2, I4).
+        from pipeline.stage_floor import study_floor_stage, most_advanced
+        floor = study_floor_stage(result.confidence_tier())
+        if floor is not None:
+            cur_stage_row = conn.execute(
+                "SELECT stage FROM projects WHERE project_id = ?", (project_id,)
+            ).fetchone()
+            cur_stage = cur_stage_row["stage"] if cur_stage_row else None
+            resolved = most_advanced(cur_stage, floor)
+            if resolved != cur_stage:
+                conn.execute(
+                    "UPDATE projects SET stage = ?, stage_source = 'study_floor' WHERE project_id = ?",
+                    (resolved, project_id),
+                )
+
         conn.commit()
         study_id = cur.lastrowid
         logger.info("Persisted %s study #%d for %s — %s", result.study_type, study_id, ticker, result.project_name)

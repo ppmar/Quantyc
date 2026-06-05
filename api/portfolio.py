@@ -20,6 +20,10 @@ STAGE_ORDER = [
 
 _STAGE_RANK = {s: i for i, s in enumerate(STAGE_ORDER)}
 
+# Below this study NPV (reporting-currency millions), an uplift % is dominated by
+# its small base and must not be ranked on % alone. Tunable; not ticker-specific.
+_LOW_BASE_NPV_M = 50.0
+
 
 def _most_advanced_stage(stages: list[str]) -> str | None:
     if not stages:
@@ -119,20 +123,26 @@ def portfolio_companies():
     # Latest revaluation per company (best uplift across projects)
     reval_map: dict[str, dict] = {}
     reval_rows = _query_db("""
-        SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift_pct, r.price_spot, r.commodity,
-               r.computed_at,
+        SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift, r.npv_uplift_pct,
+               r.price_spot, r.commodity, r.computed_at, s.reporting_currency,
                ROW_NUMBER() OVER (PARTITION BY c.company_id ORDER BY r.computed_at DESC) AS rn
         FROM revaluations r
         JOIN companies c ON c.company_id = r.company_id
+        LEFT JOIN studies s ON s.study_id = r.study_id
     """)
     for rv in reval_rows:
         if rv["rn"] == 1:
+            npv_dfs = rv["npv_dfs"]
             reval_map[rv["ticker"]] = {
-                "npv_dfs": rv["npv_dfs"],
+                "npv_dfs": npv_dfs,
                 "npv_spot": rv["npv_spot"],
+                "npv_uplift_abs": rv["npv_uplift"],
                 "npv_uplift_pct": rv["npv_uplift_pct"],
                 "commodity": rv["commodity"],
                 "price_spot": rv["price_spot"],
+                "reporting_currency": rv["reporting_currency"],
+                # A huge % on a tiny base is not a strong signal — flag it (I6).
+                "low_base": (npv_dfs is not None and npv_dfs < _LOW_BASE_NPV_M),
             }
 
     companies = []
@@ -203,12 +213,25 @@ def portfolio_companies():
         ]
 
     # Sort
+    def _reval_field(c, field):
+        rv = c.get("latest_revaluation")
+        return rv.get(field) if rv else None
+
     if sort_key == "most_advanced_stage_desc":
         companies.sort(key=lambda c: _STAGE_RANK.get(c["most_advanced_stage"] or "unknown", 99))
     elif sort_key == "project_count":
         companies.sort(key=lambda c: -c["active_project_count"])
     elif sort_key == "ticker":
         companies.sort(key=lambda c: c["ticker"])
+    elif sort_key == "uplift_abs_desc":
+        # Best signal: rank by absolute uplift, not %.
+        companies.sort(key=lambda c: -(_reval_field(c, "npv_uplift_abs") or float("-inf")))
+    elif sort_key == "uplift_pct_desc":
+        # Rank by %, but low-base companies sink below full-base ones (I6).
+        companies.sort(key=lambda c: (
+            0 if not _reval_field(c, "low_base") else 1,
+            -(_reval_field(c, "npv_uplift_pct") or float("-inf")),
+        ))
 
     total = len(companies)
     companies = companies[:limit]

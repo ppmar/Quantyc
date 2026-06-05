@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ReportingCurrency = Literal["AUD", "USD", "CAD", "GBP", "EUR", "ZAR"]
 
@@ -81,6 +81,23 @@ class StudyExtraction(BaseModel):
         if v.strip().lower() in forbidden:
             raise ValueError(f"project_name is a placeholder: {v}")
         return v.strip()
+
+    @model_validator(mode="after")
+    def _sanity_warnings(self):
+        """Append (never raise) extraction-sanity warnings. Partial-tolerant (I4)."""
+        post, pre = self.post_tax_npv_millions, self.pre_tax_npv_millions
+        if post is not None and pre is not None:
+            if post == pre:
+                self.extraction_warnings.append("npv_post_equals_pre_suspected_duplicate")
+            elif post > pre:
+                self.extraction_warnings.append(f"npv_post_gt_pre:{post}>{pre}")
+        if self.aisc_per_unit is not None and self.aisc_unit:
+            # malformed compound units like "US$1243AUD/oz": two currency tokens.
+            u = self.aisc_unit
+            cur_tokens = sum(t in u for t in ("USD", "US$", "AUD", "A$", "CAD", "C$"))
+            if cur_tokens >= 2:
+                self.extraction_warnings.append(f"aisc_unit_malformed:{u}")
+        return self
 
     def has_minimum_data(self) -> bool:
         """At least NPV (pre or post tax) AND initial capex must be present."""

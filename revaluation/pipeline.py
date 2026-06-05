@@ -7,7 +7,7 @@ each new DFS parsed.
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -21,6 +21,11 @@ from revaluation.prices import get_or_fetch_price, PriceFetchError
 
 logger = logging.getLogger(__name__)
 
+# A producing mine whose study is older than this likely has extended reserves
+# (mine-life upgrades, new deposits) not in the study, so depletion off the old
+# mine_life understates remaining life. Surface a warning past this age.
+STALE_STUDY_YEARS = 3.0
+
 
 def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     """
@@ -28,11 +33,11 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     Raises RevaluationError or PriceFetchError on hard failure.
     """
     study = conn.execute("""
-        SELECT s.study_id, s.project_id, s.mine_life_years, s.annual_production,
+        SELECT s.study_id, s.project_id, s.study_date, s.mine_life_years, s.annual_production,
                s.recovery_pct, s.post_tax_npv, s.discount_rate_pct, s.tax_rate_pct,
                s.assumed_price_deck, s.reporting_currency, s.study_stage,
                s.study_confidence_tier,
-               p.project_id, p.company_id,
+               p.project_id, p.company_id, p.production_start_date,
                pc.commodity, pc.is_primary
         FROM studies s
         JOIN projects p ON p.project_id = s.project_id
@@ -101,6 +106,21 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     elif study["reporting_currency"] != "USD":
         raise RevaluationError(f"reporting_currency_not_supported:{study['reporting_currency']}")
 
+    # Years already in production at the valuation date. None when the project has
+    # no production_start_date (developer / pre-production) -> annuity over full life.
+    # Set for producers -> annuity over remaining life only (see math.remaining_life_years).
+    production_elapsed_years = None
+    start_raw = study["production_start_date"]
+    if start_raw:
+        try:
+            start_date = date.fromisoformat(start_raw)
+            elapsed_days = (date.today() - start_date).days
+            if elapsed_days > 0:
+                production_elapsed_years = Decimal(str(elapsed_days)) / Decimal("365.25")
+        except ValueError:
+            logger.warning("Study %d: unparseable production_start_date=%r, treating as developer",
+                           study_id, start_raw)
+
     inp = RevaluationInput(
         commodity=commodity,
         price_dfs_usd=price_dfs,
@@ -113,9 +133,26 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         npv_dfs=Decimal(str(study["post_tax_npv"])),
         reporting_currency=study["reporting_currency"],
         fx_rate=fx_rate,
+        production_elapsed_years=production_elapsed_years,
     )
 
     result = revalue(inp)
+
+    # Stale-study guard. Remaining life is derived from THIS study's mine_life.
+    # For a producer whose study is years old, reserves have often been extended
+    # (new deposits, mine-life upgrades) since, so `mine_life - elapsed` understates
+    # the real remaining life and the depletion-adjusted uplift is too low. Flag it.
+    warnings = list(result.warnings)
+    if production_elapsed_years is not None and study["study_date"]:
+        try:
+            study_age_years = (date.today() - date.fromisoformat(study["study_date"])).days / 365.25
+            if study_age_years > STALE_STUDY_YEARS:
+                warnings.append(
+                    f"depletion_from_stale_study:study_date={study['study_date']}_"
+                    f"age={study_age_years:.1f}y_remaining_life_may_be_understated"
+                )
+        except ValueError:
+            logger.warning("Study %d: unparseable study_date=%r", study_id, study["study_date"])
 
     cur = conn.execute("""
         INSERT INTO revaluations (
@@ -123,22 +160,23 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
             commodity, price_dfs, price_spot, price_spot_id,
             fx_rate, fx_rate_price_id,
             annual_production, annual_production_unit,
-            mine_life_years, discount_rate_pct, tax_rate_pct, annuity_factor,
+            mine_life_years, remaining_life_years, discount_rate_pct, tax_rate_pct, annuity_factor,
             npv_dfs, npv_spot, npv_uplift, npv_uplift_pct,
             method_version, warnings, study_confidence_tier
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         study_id, study["project_id"], study["company_id"],
         datetime.now(timezone.utc).isoformat(),
         commodity, float(price_dfs), float(price_spot), price_spot_id,
         float(fx_rate) if fx_rate else None, fx_price_id,
         float(inp.annual_production), production_unit,
-        float(inp.mine_life_years), float(inp.discount_rate_pct),
+        float(inp.mine_life_years), float(result.remaining_life_years),
+        float(inp.discount_rate_pct),
         float(result.tax_rate_used), float(result.annuity_factor),
         float(result.npv_dfs), float(result.npv_spot),
         float(result.npv_uplift), float(result.npv_uplift_pct),
         result.method_version,
-        json.dumps(result.warnings),
+        json.dumps(warnings),
         study["study_confidence_tier"],
     ))
     conn.commit()

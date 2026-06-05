@@ -56,6 +56,8 @@ def _safe_add_columns(conn):
         # 0010: study NPV/tax extraction guard.
         ("studies", "needs_review", "INTEGER NOT NULL DEFAULT 0"),
         ("studies", "review_reason", "TEXT"),
+        # 0011: parse-time extraction warnings (JSON array).
+        ("studies", "extraction_warnings", "TEXT"),
     ]
     for table, col, col_type in additions:
         try:

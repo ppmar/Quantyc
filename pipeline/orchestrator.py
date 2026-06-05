@@ -316,8 +316,8 @@ def _persist_study(doc_id, ticker, result, model_name):
                 assumed_price_deck, assumed_fx,
                 reporting_currency, discount_rate_pct, tax_rate_pct,
                 extraction_method, extraction_model,
-                needs_review, review_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                needs_review, review_reason, extraction_warnings
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             project_id, doc_id, result.study_type, result.confidence_tier(),
             result.effective_date.isoformat() if result.effective_date else None,
@@ -342,6 +342,7 @@ def _persist_study(doc_id, ticker, result, model_name):
             model_name,
             1 if needs_review else 0,
             review_reason,
+            _json.dumps(result.extraction_warnings or []),
         ))
 
         # Study-to-stage floor: a freshly parsed DFS/PFS lifts the project to at

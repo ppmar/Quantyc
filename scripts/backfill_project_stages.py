@@ -41,6 +41,21 @@ from parsers.project_stage_classifier import (
     AnnEvidence,
     classify_project,
 )
+from pipeline.stage_floor import study_floor_stage, most_advanced, apply_floor
+
+
+def _best_study_tier(conn, project_id: int) -> str | None:
+    """Most-advanced study confidence tier present for the project, or None."""
+    rows = conn.execute(
+        """SELECT study_confidence_tier FROM studies
+           WHERE project_id = ? AND study_confidence_tier IS NOT NULL""",
+        (project_id,),
+    ).fetchall()
+    tiers = {r["study_confidence_tier"] for r in rows}
+    for t in ("definitive", "indicative", "conceptual"):  # most → least advanced
+        if t in tiers:
+            return t
+    return None
 
 
 def _apply_migrations():
@@ -216,15 +231,23 @@ def _persist_result(project: dict, inference: ProjectStageInference, evidence: P
     now = datetime.utcnow().isoformat()
     pid = project["project_id"]
 
+    # Deterministic study-to-stage floor: a definitive/indicative study can never
+    # leave a project below feasibility, regardless of the LLM result. The floor is
+    # a floor only — it never downgrades a more-advanced LLM stage (I1, I2).
+    tier = _best_study_tier(conn, pid)
+    resolved_stage, floor_won = apply_floor(inference.stage, tier)
+    source = "study_floor" if floor_won else "gemini_inferred"
+
     conn.execute("""
         UPDATE projects
         SET stage = ?,
             region = COALESCE(?, region),
-            stage_source = 'gemini_inferred',
+            stage_source = ?,
             stage_inferred_at = ?
         WHERE project_id = ?
-    """, (inference.stage, inference.region, now, pid))
+    """, (resolved_stage, inference.region, source, now, pid))
 
+    # Audit row keeps the RAW LLM stage (provenance of what the LLM actually said).
     conn.execute("""
         INSERT INTO project_stage_inferences
             (project_id, stage, stage_confidence, region, reasoning, evidence_json, inferred_at)
@@ -244,15 +267,33 @@ def _persist_result(project: dict, inference: ProjectStageInference, evidence: P
 
 
 def _persist_insufficient(project: dict):
-    """Mark project as insufficient evidence without changing stage."""
+    """Mark project as insufficient evidence — but still apply the study floor.
+
+    When Gemini returns nothing, a project that nonetheless has a study must not be
+    left at unknown/exploration: the study itself is deterministic evidence (I1).
+    """
     conn = get_connection()
     now = datetime.utcnow().isoformat()
-    conn.execute("""
-        UPDATE projects
-        SET stage_source = 'insufficient_evidence',
-            stage_inferred_at = ?
-        WHERE project_id = ?
-    """, (now, project["project_id"]))
+    pid = project["project_id"]
+
+    tier = _best_study_tier(conn, pid)
+    floor = study_floor_stage(tier)
+    if floor is not None:
+        resolved = most_advanced(project.get("stage"), floor)
+        conn.execute("""
+            UPDATE projects
+            SET stage = ?,
+                stage_source = 'study_floor',
+                stage_inferred_at = ?
+            WHERE project_id = ?
+        """, (resolved, now, pid))
+    else:
+        conn.execute("""
+            UPDATE projects
+            SET stage_source = 'insufficient_evidence',
+                stage_inferred_at = ?
+            WHERE project_id = ?
+        """, (now, pid))
     conn.commit()
     conn.close()
 

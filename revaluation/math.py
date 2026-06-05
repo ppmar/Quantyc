@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
-METHOD_VERSION = "first_order_v2"
+METHOD_VERSION = "first_order_v3"
 DEFAULT_TAX_RATE = Decimal("0.30")
 
 SUPPORTED_COMMODITIES = {"Au", "Ag", "Cu"}
@@ -32,11 +32,18 @@ class RevaluationInput:
     fx_rate: Optional[Decimal]       # USD per 1 AUD, e.g. 0.6452 (Yahoo AUDUSD=X convention).
                                      # Required when reporting_currency == "AUD". Used as:
                                      # amount_aud = amount_usd / fx_rate
+    production_elapsed_years: Optional[Decimal] = None
+                                     # Years already in production at the valuation date.
+                                     # None => not yet producing (developer): annuity runs
+                                     # over the FULL mine_life. Set => annuity runs over the
+                                     # REMAINING life = mine_life - elapsed, so a producer is
+                                     # not credited price uplift on ounces already mined.
 
 
 @dataclass(frozen=True)
 class RevaluationResult:
     annuity_factor: Decimal
+    remaining_life_years: Decimal    # life used for the annuity (== mine_life for developers)
     npv_dfs: Decimal
     npv_spot: Decimal
     npv_uplift: Decimal
@@ -63,6 +70,32 @@ def annuity_factor(discount_rate_pct: Decimal, mine_life_years: Decimal) -> Deci
     one_plus_r = Decimal("1") + r
     factor = (Decimal("1") - one_plus_r ** (-n)) / r
     return factor.quantize(Decimal("0.0001"))
+
+
+def remaining_life_years(
+    mine_life_years: Decimal,
+    production_elapsed_years: Optional[Decimal],
+) -> Decimal:
+    """
+    Life still to run, for the annuity.
+
+        vie_restante = duree_de_vie - (annee_courante - annee_debut_production)
+
+    `production_elapsed_years` is (annee_courante - annee_debut_production), i.e.
+    years already in production. None means the mine is not yet producing
+    (developer / pre-production), so the full mine_life remains. The result is
+    clamped to [0, mine_life_years]: a mine cannot have negative remaining life,
+    and elapsed cannot make it longer than the original plan.
+    """
+    if production_elapsed_years is None:
+        return mine_life_years
+    if production_elapsed_years < 0:
+        # Production starts in the future relative to the valuation date.
+        return mine_life_years
+    rem = mine_life_years - production_elapsed_years
+    if rem < 0:
+        return Decimal("0")
+    return rem
 
 
 def normalize_production_to_unit_price_basis(
@@ -122,8 +155,21 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
     )
     warnings.extend(conv_warnings)
 
-    # Annuity factor
-    a = annuity_factor(inp.discount_rate_pct, inp.mine_life_years)
+    # Annuity over REMAINING life, not full mine life. A producer already mined
+    # part of its plan; price uplift only applies to ounces still to come.
+    life = remaining_life_years(inp.mine_life_years, inp.production_elapsed_years)
+    if inp.production_elapsed_years is not None:
+        warnings.append(
+            f"remaining_life_{life}y_of_{inp.mine_life_years}y_"
+            f"elapsed_{inp.production_elapsed_years}y"
+        )
+    if life <= 0:
+        # Mine is fully depleted at the valuation date: no go-forward production,
+        # so the first-order price uplift is zero.
+        warnings.append("mine_depleted_no_remaining_life")
+        a = Decimal("0.0000")
+    else:
+        a = annuity_factor(inp.discount_rate_pct, life)
 
     # Both prices are USD per invariant I2/I3. Compute uplift in USD.
     delta_price_usd = inp.price_spot_usd - inp.price_dfs_usd
@@ -150,6 +196,7 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
 
     return RevaluationResult(
         annuity_factor=a,
+        remaining_life_years=life,
         npv_dfs=inp.npv_dfs,
         npv_spot=npv_spot.quantize(Decimal("0.01")),
         npv_uplift=npv_uplift.quantize(Decimal("0.01")),

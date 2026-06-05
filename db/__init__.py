@@ -50,6 +50,12 @@ def _safe_add_columns(conn):
         ("documents", "failure_class", "TEXT"),
         ("documents", "retry_count", "INTEGER NOT NULL DEFAULT 0"),
         ("documents", "next_retry_at", "TEXT"),
+        # 0009: remaining-life revaluation fix.
+        ("projects", "production_start_date", "TEXT"),
+        ("revaluations", "remaining_life_years", "REAL"),
+        # 0010: study NPV/tax extraction guard.
+        ("studies", "needs_review", "INTEGER NOT NULL DEFAULT 0"),
+        ("studies", "review_reason", "TEXT"),
     ]
     for table, col, col_type in additions:
         try:

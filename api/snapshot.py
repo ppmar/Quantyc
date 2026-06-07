@@ -414,14 +414,15 @@ def api_company_snapshot(ticker: str):
 
         # Latest study
         study_row = conn.execute(
-            """SELECT study_stage, study_confidence_tier, study_date, mine_life_years, annual_production,
+            """SELECT study_id, study_stage, study_confidence_tier, study_date, mine_life_years, annual_production,
                       recovery_pct, initial_capex, sustaining_capex, opex,
                       post_tax_npv, pre_tax_npv, irr_pct, payback_years,
                       aisc_per_unit, aisc_unit, assumed_price_deck, assumed_fx,
                       reporting_currency, discount_rate_pct, extraction_model,
                       needs_review, review_reason, extraction_warnings
                FROM studies WHERE project_id = ?
-               ORDER BY study_date DESC LIMIT 1""",
+               ORDER BY CASE WHEN study_date IS NULL OR study_date <= date('now') THEN 0 ELSE 1 END,
+                        study_date DESC LIMIT 1""",
             (pid,),
         ).fetchone()
 
@@ -470,23 +471,26 @@ def api_company_snapshot(ticker: str):
         reval_out = None
         try:
             import json as _rjson
-            reval_row = conn.execute(
-                """SELECT r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
-                          r.annual_production, r.annual_production_unit,
-                          r.mine_life_years, r.discount_rate_pct, r.tax_rate_pct,
-                          r.annuity_factor, r.npv_dfs, r.npv_spot,
-                          r.npv_uplift, r.npv_uplift_pct,
-                          r.method_version, r.warnings, r.computed_at,
-                          r.study_confidence_tier,
-                          cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
-                          s.reporting_currency
-                   FROM revaluations r
-                   JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
-                   JOIN studies s ON s.study_id = r.study_id
-                   WHERE r.project_id = ?
-                   ORDER BY r.computed_at DESC LIMIT 1""",
-                (pid,),
-            ).fetchone()
+            reval_row = None
+            if study_row is not None:
+                reval_row = conn.execute(
+                    """SELECT r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
+                              r.annual_production, r.annual_production_unit,
+                              r.mine_life_years, r.discount_rate_pct, r.tax_rate_pct,
+                              r.annuity_factor, r.npv_dfs, r.npv_spot,
+                              r.npv_uplift, r.npv_uplift_pct,
+                              r.method_version, r.warnings, r.computed_at,
+                              r.study_confidence_tier,
+                              cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
+                              s.reporting_currency
+                       FROM revaluations r
+                       JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
+                       JOIN studies s ON s.study_id = r.study_id
+                       WHERE r.study_id = ?
+                         AND r.study_confidence_tier IN ('definitive', 'indicative')
+                       ORDER BY r.computed_at DESC LIMIT 1""",
+                    (study_row["study_id"],),
+                ).fetchone()
             if reval_row:
                 warnings = []
                 if reval_row["warnings"]:

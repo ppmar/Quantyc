@@ -99,6 +99,18 @@ class StudyExtraction(BaseModel):
                 self.extraction_warnings.append(f"aisc_unit_malformed:{u}")
         return self
 
+    @model_validator(mode="after")
+    def _discard_future_effective_date(self):
+        """A study cannot be 'as at' a future date. Discard it (never raise),
+        so it neither persists to studies.study_date nor poisons latest-study
+        ordering / vintage display (I3)."""
+        if self.effective_date is not None and self.effective_date > date.today():
+            self.extraction_warnings.append(
+                f"effective_date_in_future_discarded:{self.effective_date.isoformat()}"
+            )
+            self.effective_date = None
+        return self
+
     def has_minimum_data(self) -> bool:
         """At least NPV (pre or post tax) AND initial capex must be present."""
         has_npv = self.post_tax_npv_millions is not None or self.pre_tax_npv_millions is not None

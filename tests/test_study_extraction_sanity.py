@@ -41,3 +41,22 @@ def test_only_one_npv_present_no_npv_flag():
     # Partial-tolerant (I4): a single NPV is legitimate, not flagged.
     s = _base(post_tax_npv_millions=Decimal("259"))
     assert not any("npv_post" in w for w in s.extraction_warnings)
+
+
+# ── Future effective_date guard (PR2) ─────────────────────────────
+
+from datetime import date, timedelta
+
+
+def test_future_effective_date_discarded():
+    future = date.today() + timedelta(days=30)
+    s = _base(post_tax_npv_millions=Decimal("1178"), effective_date=future)
+    assert s.effective_date is None
+    assert any(w.startswith("effective_date_in_future_discarded") for w in s.extraction_warnings)
+
+
+def test_past_effective_date_kept():
+    past = date(2024, 6, 15)
+    s = _base(post_tax_npv_millions=Decimal("451"), effective_date=past)
+    assert s.effective_date == past
+    assert not any("effective_date_in_future" in w for w in s.extraction_warnings)

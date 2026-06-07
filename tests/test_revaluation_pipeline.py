@@ -253,3 +253,42 @@ def test_revalue_study_raises_on_missing_npv(mock_yahoo, test_db):
 def test_revalue_study_nonexistent_raises(test_db):
     with pytest.raises(RevaluationError, match="study_not_found"):
         revalue_study(test_db, 9999)
+
+
+# ── Tier gate: conceptual studies are never revalued (PR1) ─────────
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_study_blocks_conceptual(mock_yahoo, test_db):
+    """Scoping/conceptual study -> RevaluationError, no row, no spot fetch."""
+    price_deck = json.dumps([{"commodity": "Au", "price": 3500.0, "unit": "USD/oz"}])
+    test_db.execute("""
+        INSERT INTO studies (
+            project_id, study_stage, study_confidence_tier, study_date,
+            mine_life_years, annual_production, recovery_pct,
+            post_tax_npv, discount_rate_pct, tax_rate_pct,
+            assumed_price_deck, reporting_currency
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (1, "Scoping", "conceptual", "2025-06-30", 12.0, 141000.0, 84.0,
+          1178.0, 5.0, 30.0, price_deck, "USD"))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    with pytest.raises(RevaluationError, match=r"not_revaluable_tier:conceptual"):
+        revalue_study(test_db, sid)
+    mock_yahoo.assert_not_called()
+    assert test_db.execute("SELECT COUNT(*) FROM revaluations").fetchone()[0] == 0
+
+
+def test_revalue_study_blocks_null_tier_scoping_stage(test_db):
+    """NULL tier on a Scoping stage derives to conceptual and is blocked (I2)."""
+    price_deck = json.dumps([{"commodity": "Au", "price": 3500.0, "unit": "USD/oz"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date,
+            mine_life_years, annual_production, recovery_pct, post_tax_npv,
+            discount_rate_pct, assumed_price_deck, reporting_currency)
+        VALUES (?, 'Scoping', NULL, '2025-06-30', 12.0, 141000.0, 84.0, 1178.0, 5.0, ?, 'USD')
+    """, (1, price_deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    with pytest.raises(RevaluationError, match=r"not_revaluable_tier:conceptual"):
+        revalue_study(test_db, sid)

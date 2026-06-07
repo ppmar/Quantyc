@@ -18,6 +18,7 @@ from revaluation.math import (
     normalize_cu_price_to_per_lb,
     RevaluationError,
 )
+from parsers.dfs_study_schemas import _TIER_BY_TYPE
 from revaluation.prices import get_or_fetch_price, PriceFetchError
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,18 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
 
     if not study:
         raise RevaluationError(f"study_not_found:{study_id}")
+
+    # --- Tier gate (chokepoint; do NOT rely on callers) ---------------
+    # Only definitive/indicative studies are revaluable. Scoping/PEA
+    # (conceptual) and anything unmappable must never produce a reval row.
+    # This is the single enforcement point: the orchestrator, asx_poller,
+    # and /api/revalue/backfill also gate, but run_revaluation_poc.py and
+    # any direct caller do not — so the invariant lives here.
+    tier = study["study_confidence_tier"]
+    if tier is None:
+        tier = _TIER_BY_TYPE.get(study["study_stage"])  # legacy rows: derive from stage
+    if tier not in ("definitive", "indicative"):
+        raise RevaluationError(f"not_revaluable_tier:{tier}")
 
     commodity = study["commodity"]
     if commodity not in SUPPORTED_COMMODITIES:

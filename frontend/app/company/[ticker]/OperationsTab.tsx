@@ -73,6 +73,7 @@ function computeStudyVintage(isoDate: string | null): { years: number; tier: "fr
   const d = new Date(isoDate);
   if (isNaN(d.getTime())) return null;
   const years = (Date.now() - d.getTime()) / (365.25 * 24 * 3600 * 1000);
+  if (years < 0) return null;   // future-dated study: no vintage badge (defensive; backend I3 should prevent this)
   let tier: "fresh" | "aging" | "stale";
   if (years < 3) tier = "fresh";
   else if (years < 5) tier = "aging";
@@ -237,6 +238,11 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
   // A huge % on a tiny NPV base is not a strong signal — de-emphasise it (I6).
   const lowBase = reval.npv_dfs != null && reval.npv_dfs < 50;
   const upliftColor = lowBase ? "text-zinc-400" : signalColor(upliftPct);
+  // Label the assumed price by the real study tier, not hardcoded "DFS" (I6).
+  const assumedLabel =
+    reval.study_confidence_tier === "definitive" ? "DFS assumed"
+    : reval.study_confidence_tier === "indicative" ? "PFS assumed"
+    : "Study assumed";
 
   const spotDate = reval.spot_fetched_at
     ? new Date(reval.spot_fetched_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
@@ -264,7 +270,7 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
       {/* Price comparison */}
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">DFS assumed</p>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">{assumedLabel}</p>
           <p className="text-sm text-zinc-400 tabular-nums">
             {fmtPriceForCommodity(reval.price_dfs, reval.commodity)} {reval.price_unit}
           </p>
@@ -366,7 +372,9 @@ export function OperationsTab({ projects }: { projects: ProjectData[] }) {
             />
           )}
 
-          {project.revaluation && <RevaluationCard reval={project.revaluation} />}
+          {project.revaluation && project.revaluation.study_confidence_tier !== "conceptual" && (
+            <RevaluationCard reval={project.revaluation} />
+          )}
         </div>
       ))}
     </div>

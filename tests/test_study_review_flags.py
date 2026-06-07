@@ -60,3 +60,27 @@ def test_missing_tax_rate_alone_flags():
     needs, reason = check_study_review_flags(1000.0, 700.0, None)
     assert needs is True
     assert "missing_tax_rate" in reason
+
+
+def test_nonpositive_discount_flagged():
+    needs, reason = check_study_review_flags(750.0, 540.0, 30.0, discount_rate_pct=0.0)
+    assert needs is True
+    assert "discount_rate_nonpositive" in reason
+
+
+def test_negative_aisc_flagged():
+    needs, reason = check_study_review_flags(750.0, 540.0, 30.0, aisc_per_unit=-0.24)
+    assert needs is True
+    assert "aisc_negative" in reason
+
+
+def test_positive_discount_and_aisc_clean():
+    needs, reason = check_study_review_flags(750.0, 540.0, 30.0, discount_rate_pct=8.0, aisc_per_unit=1200.0)
+    assert needs is False
+    assert reason is None
+
+
+def test_new_params_default_none_backcompat():
+    # Old 3-arg call still works (discount/aisc unchecked).
+    needs, reason = check_study_review_flags(750.0, 540.0, 30.0)
+    assert needs is False

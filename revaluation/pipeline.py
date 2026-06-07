@@ -15,6 +15,7 @@ from revaluation.math import (
     RevaluationInput,
     SUPPORTED_COMMODITIES,
     revalue,
+    normalize_cu_price_to_per_lb,
     RevaluationError,
 )
 from revaluation.prices import get_or_fetch_price, PriceFetchError
@@ -85,12 +86,20 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # Extract DFS price assumption for primary commodity
     price_deck = json.loads(study["assumed_price_deck"] or "[]")
     price_dfs = None
+    price_dfs_unit = None
+    cu_price_warning = None
     for entry in price_deck:
         if entry.get("commodity") == commodity:
             price_dfs = Decimal(str(entry["price"]))
+            price_dfs_unit = entry.get("unit")
             break
     if price_dfs is None:
         raise RevaluationError(f"no_dfs_price_for_commodity:{commodity}")
+
+    # Copper decks are often quoted in USD/tonne while spot (HG=F) is USD/lb;
+    # reconcile to USD/lb so the price delta isn't off by ~2204x (CYM Nifty bug).
+    if commodity == "Cu":
+        price_dfs, cu_price_warning = normalize_cu_price_to_per_lb(price_dfs, price_dfs_unit)
 
     # Spot price
     try:
@@ -143,6 +152,8 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # (new deposits, mine-life upgrades) since, so `mine_life - elapsed` understates
     # the real remaining life and the depletion-adjusted uplift is too low. Flag it.
     warnings = list(result.warnings)
+    if cu_price_warning:
+        warnings.append(cu_price_warning)
     if production_elapsed_years is not None and study["study_date"]:
         try:
             study_age_years = (date.today() - date.fromisoformat(study["study_date"])).days / 365.25

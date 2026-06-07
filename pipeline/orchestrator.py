@@ -464,8 +464,51 @@ def _extract_resource_update(doc_id, pdf_bytes, ticker, announcement_date, stats
         conn.close()
 
 
+# Leading tokens that mark an LLM-extracted project name as an announcement
+# prose fragment rather than a real deposit name.
+_JUNK_FIRST_TOKENS = {
+    "the", "a", "an", "and", "or", "for", "its", "our", "their", "this", "that",
+    "these", "those", "both", "each", "all", "it", "further", "updated", "revised",
+    "resumption", "details", "reporting", "continues", "later", "regarding",
+    "information", "following", "additional",
+}
+# Lowercase function words; their presence mid-name marks a sentence fragment.
+_JUNK_CONNECTIVES = {
+    "the", "a", "an", "and", "or", "of", "at", "to", "in", "for", "as", "with",
+    "by", "on", "from", "that", "this", "its", "our", "their", "it",
+}
+
+
+def _is_junk_project_name(name: str) -> bool:
+    """True if the name looks like an announcement fragment, not a deposit name.
+
+    Real deposit names are capitalised proper nouns ("Hemi", "Karlawinda",
+    "Vulcan Zero Carbon Lithium Phase One"). Fragments start lowercase ("our",
+    "later in the"), are lone/leading stopwords ("Updated", "Further information
+    regarding the"), or contain a lowercase connective mid-name ("Table 4 and
+    the 2018 Annual") — which an all-proper-noun project name never does.
+    """
+    n = (name or "").strip()
+    if not n:
+        return True
+    if n[0].islower():
+        return True
+    words = n.split()
+    first = words[0].lower().strip(".,:;")
+    if first in _JUNK_FIRST_TOKENS and (len(words) == 1 or len(words) >= 3):
+        return True
+    for w in words[1:]:
+        if w.islower() and w.strip(".,:;") in _JUNK_CONNECTIVES:
+            return True
+    return False
+
+
 def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
-    """Look up a project by (company_id, project_name) or create it."""
+    """Look up a project by (company_id, project_name) or create it.
+
+    Junk fragment names are not allowed to spawn new projects: if the company
+    already has a real (non-junk) project, attach to its most recent one instead.
+    """
     from datetime import datetime, timezone
 
     # Case-insensitive match, strip trailing Project/Deposit/Mine
@@ -481,6 +524,20 @@ def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
 
     if row:
         return row["project_id"]
+
+    # Don't let an announcement-fragment name create a phantom project. Attach to
+    # the company's most-recent real project if one exists.
+    if _is_junk_project_name(clean_name):
+        for cand in conn.execute(
+            "SELECT project_id, project_name FROM projects WHERE company_id = ? ORDER BY created_at DESC",
+            (company_id,),
+        ).fetchall():
+            if not _is_junk_project_name(cand["project_name"]):
+                logger.warning("Junk project name %r attached to existing project #%d (%r)",
+                               clean_name, cand["project_id"], cand["project_name"])
+                return cand["project_id"]
+        logger.warning("Junk project name %r and no real project for company %d; creating anyway",
+                       clean_name, company_id)
 
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(

@@ -233,7 +233,8 @@ _TAX_GAP_MIN = 0.20
 _TAX_GAP_MAX = 0.45
 
 
-def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct):
+def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct,
+                             discount_rate_pct=None, aisc_per_unit=None):
     """Return (needs_review: bool, review_reason: str|None) for a study's economics.
 
     Flags (mirrors company_financials._check_review_flags — surfaces, never blocks):
@@ -241,6 +242,8 @@ def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct):
       - post_tax_npv_ge_pre_tax_npv                 (inverted/equal — tax can't add value)
       - implied_tax_gap_<pct>_out_of_band           (one NPV likely mislabelled)
       - missing_tax_rate                            (revaluation silently defaults to 30%)
+      - discount_rate_nonpositive                   (0/neg discount — invalid NPV basis)
+      - aisc_negative                               (negative cost — extraction error)
     """
     reasons = []
     if pre_tax_npv is None:
@@ -256,6 +259,10 @@ def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct):
                 reasons.append(f"implied_tax_gap_{gap * 100:.1f}pct_out_of_band")
     if tax_rate_pct is None:
         reasons.append("missing_tax_rate")
+    if discount_rate_pct is not None and discount_rate_pct <= 0:
+        reasons.append("discount_rate_nonpositive")
+    if aisc_per_unit is not None and aisc_per_unit < 0:
+        reasons.append("aisc_negative")
     return (len(reasons) > 0, "; ".join(reasons) if reasons else None)
 
 
@@ -301,7 +308,10 @@ def _persist_study(doc_id, ticker, result, model_name):
         pre_tax_val = float(result.pre_tax_npv_millions) if result.pre_tax_npv_millions else None
         post_tax_val = float(result.post_tax_npv_millions) if result.post_tax_npv_millions else None
         tax_rate_val = float(result.tax_rate_pct) if result.tax_rate_pct else None
-        needs_review, review_reason = check_study_review_flags(pre_tax_val, post_tax_val, tax_rate_val)
+        discount_val = float(result.discount_rate_pct) if result.discount_rate_pct is not None else None
+        aisc_val = float(result.aisc_per_unit) if result.aisc_per_unit is not None else None
+        needs_review, review_reason = check_study_review_flags(
+            pre_tax_val, post_tax_val, tax_rate_val, discount_val, aisc_val)
         if needs_review:
             logger.warning("Study for %s — %s flagged for review: %s",
                            ticker, result.project_name, review_reason)

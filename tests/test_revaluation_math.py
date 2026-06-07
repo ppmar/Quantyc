@@ -368,3 +368,46 @@ def test_fully_depleted_producer_has_zero_uplift():
     assert result.npv_uplift == Decimal("0.00")
     assert result.npv_spot == result.npv_dfs
     assert "mine_depleted_no_remaining_life" in result.warnings
+
+
+# ── Copper price unit normalization (CYM Nifty bug) ───────────────
+
+from revaluation.math import normalize_cu_price_to_per_lb, EXTREME_UPLIFT_RATIO
+
+
+def test_cu_price_per_tonne_unit_converts():
+    p, w = normalize_cu_price_to_per_lb(Decimal("9370"), "USD/t")
+    assert abs(p - Decimal("9370") / Decimal("2204.62262")) < Decimal("0.001")
+    assert w and "t_to_lb" in w
+
+
+def test_cu_price_mislabeled_lb_magnitude_converts():
+    # CYM case: "13000 USD/lb" is really USD/tonne.
+    p, w = normalize_cu_price_to_per_lb(Decimal("13000"), "USD/lb")
+    assert abs(p - Decimal("13000") / Decimal("2204.62262")) < Decimal("0.001")
+    assert w and "magnitude_t_to_lb" in w
+
+
+def test_cu_price_genuine_per_lb_unchanged():
+    p, w = normalize_cu_price_to_per_lb(Decimal("4.20"), "USD/lb")
+    assert p == Decimal("4.20")
+    assert w is None
+
+
+def test_cu_price_blank_unit_small_value_unchanged():
+    p, w = normalize_cu_price_to_per_lb(Decimal("5.5"), None)
+    assert p == Decimal("5.5")
+    assert w is None
+
+
+def test_extreme_uplift_flagged():
+    # Tiny base, large spot move -> >500% uplift -> flagged.
+    inp = RevaluationInput(
+        commodity="Au", price_dfs_usd=Decimal("1250"), price_spot_usd=Decimal("4500"),
+        annual_production=Decimal("100000"), annual_production_unit="oz",
+        mine_life_years=Decimal("10"), discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("18"),
+        reporting_currency="USD", fx_rate=None,
+    )
+    result = revalue(inp)
+    assert any(w.startswith("extreme_uplift_check_inputs") for w in result.warnings)

@@ -10,6 +10,9 @@ from typing import Optional
 
 METHOD_VERSION = "first_order_v3"
 DEFAULT_TAX_RATE = Decimal("0.30")
+# |uplift| beyond this ratio (500%) is almost always a bad input (unit mismatch,
+# stale deck far from spot) rather than real leverage — flag it, don't trust it.
+EXTREME_UPLIFT_RATIO = Decimal("5")
 
 SUPPORTED_COMMODITIES = {"Au", "Ag", "Cu"}
 
@@ -96,6 +99,34 @@ def remaining_life_years(
     if rem < 0:
         return Decimal("0")
     return rem
+
+
+_LB_PER_TONNE = Decimal("2204.62262")
+# Above this, a "USD/lb" copper price is implausible and is really USD/tonne.
+# Cu/lb has historically topped out well under $10; LME $/tonne is >$1500.
+_CU_PER_LB_MAX = Decimal("100")
+
+
+def normalize_cu_price_to_per_lb(price: Decimal, unit: Optional[str]) -> tuple[Decimal, Optional[str]]:
+    """
+    Reconcile a copper DFS price to USD/lb (the basis spot is fetched in, HG=F).
+
+    Studies frequently report copper NPV decks in USD/tonne (LME convention) while
+    the deck's unit string is mislabelled "USD/lb" (e.g. CYM Nifty: "13000 USD/lb").
+    Use the unit when it clearly says per-tonne, and fall back to magnitude: any
+    copper "per lb" price above _CU_PER_LB_MAX is really per-tonne.
+
+    Returns (price_per_lb, warning_or_None).
+    """
+    u = (unit or "").lower().replace(" ", "")
+    per_tonne = any(tok in u for tok in ("/t", "/tonne", "/mt", "pertonne"))
+    per_lb = "/lb" in u or u.endswith("lb")
+    if per_tonne and not per_lb:
+        return price / _LB_PER_TONNE, f"cu_price_unit_t_to_lb:{price}{unit}"
+    if price > _CU_PER_LB_MAX:
+        # Unit says lb (or is blank) but the magnitude is a per-tonne figure.
+        return price / _LB_PER_TONNE, f"cu_price_magnitude_t_to_lb:{price}{unit}"
+    return price, None
 
 
 def normalize_production_to_unit_price_basis(
@@ -193,6 +224,9 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
     npv_spot = inp.npv_dfs + delta_npv_reporting_currency
     npv_uplift = npv_spot - inp.npv_dfs
     npv_uplift_pct = (npv_uplift / inp.npv_dfs) if inp.npv_dfs != 0 else Decimal("0")
+
+    if abs(npv_uplift_pct) > EXTREME_UPLIFT_RATIO:
+        warnings.append(f"extreme_uplift_check_inputs:{npv_uplift_pct.quantize(Decimal('0.1'))}")
 
     return RevaluationResult(
         annuity_factor=a,

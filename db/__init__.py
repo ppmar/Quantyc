@@ -58,6 +58,9 @@ def _safe_add_columns(conn):
         ("studies", "review_reason", "TEXT"),
         # 0011: parse-time extraction warnings (JSON array).
         ("studies", "extraction_warnings", "TEXT"),
+        # 0012: robustness audit — production source unit + header-derived tier.
+        ("studies", "annual_production_unit", "TEXT"),
+        ("studies", "header_tier", "TEXT"),
     ]
     for table, col, col_type in additions:
         try:

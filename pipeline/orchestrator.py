@@ -266,6 +266,48 @@ def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct,
     return (len(reasons) > 0, "; ".join(reasons) if reasons else None)
 
 
+def header_stage_tier(header: str | None) -> str | None:
+    """Confidence tier implied by a document header/title, or None if generic.
+
+    The header is the most reliable stage signal; the LLM's study_type sometimes
+    contradicts it (AZY: "Scoping Study Update" extracted as "Updated DFS"). Used
+    to override the reval gate TOWARD conceptual (never revalue a Scoping study).
+    """
+    if not header:
+        return None
+    h = header.lower()
+    if "scoping" in h or "pea" in h:
+        return "conceptual"
+    if "pre-feasibility" in h or "prefeasibility" in h or "pre feasibility" in h or "pfs" in h:
+        return "indicative"
+    if "definitive feasibility" in h or "dfs" in h or "feasibility study" in h or "bankable" in h:
+        return "definitive"
+    return None
+
+
+_PROD_UNIT_MULT = {
+    "oz": 1, "ozs": 1, "koz": 1_000, "kozs": 1_000, "moz": 1_000_000,
+    "t": 1, "tonnes": 1, "tonne": 1, "kt": 1_000, "ktpa": 1_000, "mt": 1_000_000, "mtpa": 1_000_000,
+}
+
+
+def normalize_annual_production(value, unit):
+    """Convert annual production to a canonical absolute unit (oz or t) using the
+    extracted unit. Returns (canonical_value, warning_or_None). Falls back to the
+    raw value when the unit is unknown (the magnitude heuristic stays downstream)."""
+    if value is None:
+        return None, None
+    if not unit:
+        return value, None
+    key = unit.strip().lower().split("/")[0].strip()
+    mult = _PROD_UNIT_MULT.get(key)
+    if mult is None:
+        return value, None
+    if mult != 1:
+        return value * mult, f"production_normalized_{unit}_x{mult}"
+    return value, None
+
+
 def _persist_study(doc_id, ticker, result, model_name):
     """Persist study extraction to projects (upsert) + studies (insert). Returns study_id."""
     import json as _json
@@ -310,8 +352,42 @@ def _persist_study(doc_id, ticker, result, model_name):
         tax_rate_val = float(result.tax_rate_pct) if result.tax_rate_pct else None
         discount_val = float(result.discount_rate_pct) if result.discount_rate_pct is not None else None
         aisc_val = float(result.aisc_per_unit) if result.aisc_per_unit is not None else None
+        # Header-derived tier (R1): authoritative stage signal from the announcement
+        # title; flag when it contradicts the LLM and is more conceptual.
+        hdr_row = conn.execute("SELECT header, announcement_date FROM documents WHERE document_id = ?", (doc_id,)).fetchone()
+        header_tier = header_stage_tier(hdr_row["header"] if hdr_row else None)
+
+        # R4: a study can't be 'as at' after its announcement; clamp the off-by-one.
+        eff = result.effective_date
+        ann = hdr_row["announcement_date"] if hdr_row else None
+        eff_iso = eff.isoformat() if eff else None
+        if eff_iso and ann and eff_iso > ann:
+            warns_clamp = f"effective_date_after_announcement_clamped:{eff_iso}->{ann}"
+            eff_iso = ann
+        else:
+            warns_clamp = None
+        _RANK = {"definitive": 0, "indicative": 1, "conceptual": 2}
+        llm_tier = result.confidence_tier()
+        warns = list(result.extraction_warnings or [])
+        if warns_clamp:
+            warns.append(warns_clamp)
+        if header_tier and _RANK.get(header_tier, 9) > _RANK.get(llm_tier, 9):
+            review_extra = f"study_type_header_mismatch:hdr={header_tier},llm={llm_tier}"
+        else:
+            review_extra = None
+
+        # Production normalized to canonical absolute units via the source unit (R2).
+        prod_norm, prod_warn = normalize_annual_production(
+            float(result.annual_production) if result.annual_production else None,
+            result.annual_production_unit)
+        if prod_warn:
+            warns.append(prod_warn)
+
         needs_review, review_reason = check_study_review_flags(
             pre_tax_val, post_tax_val, tax_rate_val, discount_val, aisc_val)
+        if review_extra:
+            needs_review = True
+            review_reason = (review_reason + "; " + review_extra) if review_reason else review_extra
         if needs_review:
             logger.warning("Study for %s — %s flagged for review: %s",
                            ticker, result.project_name, review_reason)
@@ -319,20 +395,21 @@ def _persist_study(doc_id, ticker, result, model_name):
         cur = conn.execute("""
             INSERT INTO studies (
                 project_id, document_id, study_stage, study_confidence_tier, study_date,
-                mine_life_years, annual_production, recovery_pct,
+                mine_life_years, annual_production, annual_production_unit, recovery_pct,
                 initial_capex, sustaining_capex, opex,
                 post_tax_npv, pre_tax_npv, irr_pct, payback_years,
                 aisc_per_unit, aisc_unit,
                 assumed_price_deck, assumed_fx,
                 reporting_currency, discount_rate_pct, tax_rate_pct,
                 extraction_method, extraction_model,
-                needs_review, review_reason, extraction_warnings
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                needs_review, review_reason, extraction_warnings, header_tier
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             project_id, doc_id, result.study_type, result.confidence_tier(),
-            result.effective_date.isoformat() if result.effective_date else None,
+            eff_iso,
             float(result.mine_life_years) if result.mine_life_years else None,
-            float(result.annual_production) if result.annual_production else None,
+            prod_norm,
+            result.annual_production_unit,
             float(result.recovery_pct) if result.recovery_pct else None,
             float(result.initial_capex_millions) if result.initial_capex_millions else None,
             float(result.sustaining_capex_millions) if result.sustaining_capex_millions else None,
@@ -352,7 +429,8 @@ def _persist_study(doc_id, ticker, result, model_name):
             model_name,
             1 if needs_review else 0,
             review_reason,
-            _json.dumps(result.extraction_warnings or []),
+            _json.dumps(warns),
+            header_tier,
         ))
 
         # Study-to-stage floor: a freshly parsed DFS/PFS lifts the project to at
@@ -521,9 +599,21 @@ def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
     """
     from datetime import datetime, timezone
 
-    # Case-insensitive match, strip trailing Project/Deposit/Mine
+    # Case-insensitive match, strip trailing qualifiers + commodity tokens so
+    # "Syama Gold" and "Syama" map to one project (R6). Scope words (Underground,
+    # Sulphide, Expansion, Stage N) are NOT stripped — they are real sub-projects.
     import re
-    clean_name = re.sub(r"\s+(?:Project|Deposit|Mine|Operation)\s*$", "", project_name, flags=re.I).strip()
+    clean_name = project_name
+    for _ in range(3):  # strip repeated trailing tokens, e.g. "X Gold Project"
+        new = re.sub(
+            r"\s+(?:Project|Deposit|Mine|Operations?|Limited|Ltd|"
+            r"Gold|Copper|Lithium|Nickel|Silver|Zinc|Uranium|Cobalt|Graphite|"
+            r"Iron\s*Ore|Iron|Rare\s*Earths?)\s*$",
+            "", clean_name, flags=re.I).strip()
+        if new == clean_name:
+            break
+        clean_name = new
+    clean_name = clean_name or project_name.strip()
 
     row = conn.execute(
         """SELECT project_id FROM projects

@@ -49,6 +49,7 @@ def test_db():
             document_id INTEGER,
             study_stage TEXT,
             study_confidence_tier TEXT,
+            header_tier TEXT,
             study_date TEXT,
             mine_life_years REAL,
             annual_production REAL,
@@ -323,3 +324,20 @@ def test_revalue_aud_deck_converted_to_usd(mock_yahoo, test_db):
     assert abs(row["price_dfs"] - 3300.0) < 1.0
     assert row["npv_uplift_pct"] > 0
     assert "price_deck_aud_to_usd" in row["warnings"]
+
+
+def test_revalue_blocks_conceptual_by_header(test_db):
+    """LLM mislabelled a Scoping study as DFS (tier definitive), but the header
+    says Scoping -> header_tier='conceptual' must block the reval (AZY bypass)."""
+    price_deck = json.dumps([{"commodity": "Au", "price": 1800.0, "unit": "USD/oz"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, header_tier, study_date,
+            mine_life_years, annual_production, recovery_pct, post_tax_npv, discount_rate_pct,
+            tax_rate_pct, assumed_price_deck, reporting_currency)
+        VALUES (?, 'Updated DFS', 'definitive', 'conceptual', '2024-06-15', 10.0, 150000.0, 90.0,
+                300.0, 5.0, 30.0, ?, 'USD')
+    """, (1, price_deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    with pytest.raises(RevaluationError, match=r"not_revaluable_tier:conceptual_by_header"):
+        revalue_study(test_db, sid)

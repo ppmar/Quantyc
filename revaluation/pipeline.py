@@ -38,7 +38,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         SELECT s.study_id, s.project_id, s.study_date, s.mine_life_years, s.annual_production,
                s.recovery_pct, s.post_tax_npv, s.discount_rate_pct, s.tax_rate_pct,
                s.assumed_price_deck, s.reporting_currency, s.study_stage,
-               s.study_confidence_tier,
+               s.study_confidence_tier, s.header_tier,
                p.project_id, p.company_id, p.production_start_date,
                pc.commodity, pc.is_primary
         FROM studies s
@@ -59,6 +59,10 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     tier = study["study_confidence_tier"]
     if tier is None:
         tier = _TIER_BY_TYPE.get(study["study_stage"])  # legacy rows: derive from stage
+    # Header overrides TOWARD conceptual: never revalue a study the announcement
+    # title calls Scoping/PEA, even if the LLM mislabelled it DFS (AZY bypass).
+    if study["header_tier"] == "conceptual":
+        raise RevaluationError("not_revaluable_tier:conceptual_by_header")
     if tier not in ("definitive", "indicative"):
         raise RevaluationError(f"not_revaluable_tier:{tier}")
 

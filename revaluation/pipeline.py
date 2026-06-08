@@ -128,6 +128,17 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     elif study["reporting_currency"] != "USD":
         raise RevaluationError(f"reporting_currency_not_supported:{study['reporting_currency']}")
 
+    # Convert an AUD-denominated price deck to USD so it is comparable to USD spot.
+    # The deck unit (e.g. "AUD/oz", "A$/oz", "AUD/t") carries the currency; spot is
+    # always USD. Without this an AUD deck is compared raw against USD spot
+    # (BTR: A$5000/oz deck vs US$4365 spot -> bogus -54% uplift).
+    aud_price_warning = None
+    if price_dfs_unit and ("AUD" in price_dfs_unit.upper() or "A$" in price_dfs_unit.upper()):
+        if fx_rate is None:
+            fx_rate, fx_price_id = get_or_fetch_price(conn, "AUDUSD")
+        price_dfs = price_dfs * fx_rate  # fx_rate = USD per AUD
+        aud_price_warning = f"price_deck_aud_to_usd:{price_dfs_unit}@fx{fx_rate}"
+
     # Years already in production at the valuation date. None when the project has
     # no production_start_date (developer / pre-production) -> annuity over full life.
     # Set for producers -> annuity over remaining life only (see math.remaining_life_years).
@@ -167,6 +178,8 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     warnings = list(result.warnings)
     if cu_price_warning:
         warnings.append(cu_price_warning)
+    if aud_price_warning:
+        warnings.append(aud_price_warning)
     if production_elapsed_years is not None and study["study_date"]:
         try:
             study_age_years = (date.today() - date.fromisoformat(study["study_date"])).days / 365.25

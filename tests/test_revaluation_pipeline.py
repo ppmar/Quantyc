@@ -292,3 +292,34 @@ def test_revalue_study_blocks_null_tier_scoping_stage(test_db):
     sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
     with pytest.raises(RevaluationError, match=r"not_revaluable_tier:conceptual"):
         revalue_study(test_db, sid)
+
+
+# ── AUD-denominated price deck converted to USD (BTR bug) ─────────
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_aud_deck_converted_to_usd(mock_yahoo, test_db):
+    """A$/oz deck must be FX-converted to USD before the spot delta, else an
+    AUD deck is wrongly compared to USD spot (BTR: A$5000 vs US$ spot)."""
+    mock_yahoo.side_effect = lambda s: (
+        Decimal("4000") if s == "GC=F" else Decimal("0.66") if s == "AUDUSD=X"
+        else (_ for _ in ()).throw(ValueError(s))
+    )
+    deck = json.dumps([{"commodity": "Au", "price": "5000", "unit": "AUD/oz"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date,
+            mine_life_years, annual_production, recovery_pct, post_tax_npv, pre_tax_npv,
+            discount_rate_pct, tax_rate_pct, assumed_price_deck, reporting_currency)
+        VALUES (?, 'DFS','definitive','2024-06-15', 10.0, 150000.0, 90.0, 316.0, 450.0,
+                5.0, 30.0, ?, 'AUD')
+    """, (1, deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    rid = revalue_study(test_db, sid)
+    row = test_db.execute(
+        "SELECT price_dfs, npv_uplift_pct, warnings FROM revaluations WHERE revaluation_id=?",
+        (rid,),
+    ).fetchone()
+    # 5000 AUD * 0.66 = 3300 USD/oz, vs 4000 spot -> POSITIVE uplift (not negative).
+    assert abs(row["price_dfs"] - 3300.0) < 1.0
+    assert row["npv_uplift_pct"] > 0
+    assert "price_deck_aud_to_usd" in row["warnings"]

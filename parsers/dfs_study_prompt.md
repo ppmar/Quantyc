@@ -21,8 +21,16 @@ the first three pages, and any explicit stage labels in the executive summary.
 **If the document references multiple stages (e.g., "Updated PFS following the 2022 Scoping
 Study"), use the stage of the CURRENT study being announced, not the historical one.**
 
+**The announcement HEADER/TITLE is the primary stage signal — trust it over body prose.**
+If the title says "Scoping Study" (or "Scoping Study Update"), the stage is `Scoping` — do
+NOT label it `DFS`/`Updated DFS` no matter how detailed the economics look. If the title
+says "Pre-Feasibility", the stage is `PFS`. Only fall back to body text when the title is
+generic (e.g. "Investor Presentation", "Quarterly Activities Report").
+
 **If the stage is genuinely ambiguous, prefer the lower-confidence label.** A document
 that mixes PFS-grade and DFS-grade estimates should be labeled PFS. Do not promote.
+A "Scoping Study Update" is `Scoping`, never `Updated DFS` — "Update" refers to the scoping
+study, not a DFS.
 
 ## Critical: production must be PAYABLE production
 
@@ -61,12 +69,25 @@ post-tax NPV at the rate explicitly chosen as the "base case" or "preferred" or
 Both fields exist in DFSExtraction. Populate each only with its specific value.
 If only one is stated, leave the other null. NEVER infer one from the other.
 
+**Read the financial results / summary table, not just the headline.** Pre- AND post-tax
+NPV are almost always BOTH tabulated in the results/summary table even when the headline
+quotes only one — extract both from that table. The headline often shows only one figure;
+do not stop there.
+
+**If NPVs are shown for several price cases (low/base/high), extract the base/preferred case
+only.** Never combine cases, and never put a high-price-case NPV into the pre-tax field while
+the base-case sits in post-tax — that fabricates an impossible tax gap.
+
 ## Currency handling
 
 - `reporting_currency` is the currency of the NPV.
 - All monetary fields (NPV, capex, opex_per_unit when in $/t terms) must be in that currency.
-- For commodity prices in `price_assumptions`: use the price as quoted in the DFS,
-  typically USD/oz for gold and silver, or USD/lb for copper, REGARDLESS of reporting_currency.
+- For commodity prices in `price_assumptions`: use the price as quoted in the DFS.
+  The `unit` MUST carry BOTH the currency and the per-unit exactly as quoted —
+  e.g. `USD/oz`, `AUD/oz`, `USD/lb`, `AUD/t`. Many Australian studies quote gold in
+  **AUD/oz** (e.g. "A$5,000/oz") and copper in **AUD/tonne**; record the currency you see,
+  do NOT silently restate it as USD. The downstream system converts to USD using FX —
+  but only if the unit's currency is correct.
 - For FX assumption: extract if explicitly stated in the assumptions table.
 
 ## Tax rate
@@ -80,12 +101,16 @@ Look for "effective tax rate", "company tax rate", or "royalty + tax". Common va
 
 ## Production unit normalization
 
-- For gold: `oz` (troy ounces). NOT `kg`, NOT `g`, NOT `tonnes`.
-- For silver: `oz` (troy ounces), as an **absolute** number. NOT Moz, NOT koz.
-  Silver DFSs usually quote "X Moz/yr" — convert to absolute ounces
-  (e.g. "2.7 Moz" → annual_production = 2700000).
-- For copper: `t` (metric tonnes of contained copper). NOT `lb` for annual production
-  even though the price is in USD/lb.
+**Always populate `annual_production_unit` with the EXACT unit as written in the source**
+(e.g. `oz`, `koz`, `Moz`, `t`, `kt`, `Mt`) alongside the numeric `annual_production`. The
+downstream system normalizes to absolute units using this — so the unit must be faithful.
+
+- For gold: report the number and unit as quoted (`oz`/`koz`/`Moz`). If "180 koz/yr",
+  set annual_production = 180 and annual_production_unit = "koz" (do NOT pre-multiply).
+- For silver: same — "2.7 Moz" → annual_production = 2.7, annual_production_unit = "Moz".
+- For copper: tonnes of contained copper — `t`/`kt`/`Mt` (NOT lb, even though price is USD/lb).
+- If you cannot determine the unit, leave both production and unit null and add a warning —
+  never guess the magnitude.
 
 ## General rules
 
@@ -99,6 +124,8 @@ Look for "effective tax rate", "company tax rate", or "royalty + tax". Common va
 8. study_type: see "Stage discrimination" above. Use the exact string that matches.
 9. extraction_warnings: include concerns like mixed currencies without FX, multiple scenarios where you picked base case, project_name ambiguity.
 10. All numeric fields must be single numbers, not ranges. If a value is a range (e.g., "6-7 Mt/yr"), use the midpoint (6.5) and add a warning to extraction_warnings noting the original range.
+11. `effective_date` is the study's "as at" date and can NEVER be after the announcement date, nor in the future. If you cannot find an explicit "as at"/"effective" date, leave it null — do NOT default it to the announcement date.
+12. `annual_production_unit` must always accompany `annual_production` and faithfully match the number's unit (see "Production unit normalization").
 
 ## When in doubt
 

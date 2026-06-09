@@ -471,26 +471,40 @@ def api_company_snapshot(ticker: str):
         reval_out = None
         try:
             import json as _rjson
-            reval_row = None
-            if study_row is not None:
-                reval_row = conn.execute(
-                    """SELECT r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
-                              r.annual_production, r.annual_production_unit,
-                              r.mine_life_years, r.discount_rate_pct, r.tax_rate_pct,
-                              r.annuity_factor, r.npv_dfs, r.npv_spot,
-                              r.npv_uplift, r.npv_uplift_pct,
-                              r.method_version, r.warnings, r.computed_at,
-                              r.study_confidence_tier,
-                              cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
-                              s.reporting_currency
-                       FROM revaluations r
-                       JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
-                       JOIN studies s ON s.study_id = r.study_id
-                       WHERE r.study_id = ?
-                         AND r.study_confidence_tier IN ('definitive', 'indicative')
-                       ORDER BY r.computed_at DESC LIMIT 1""",
-                    (study_row["study_id"],),
-                ).fetchone()
+            # Decouple reval from the DISPLAYED study. The displayed study is the
+            # latest of ANY tier; the reval must be the latest revaluable study's reval
+            # (definitive/indicative), future-safe, even when a newer Scoping/PEA is the
+            # one shown. Otherwise a revalued DFS gets hidden behind a later conceptual
+            # study. Scoped by project_id, so a reval whose study belongs to another
+            # project is never picked.
+            reval_row = conn.execute(
+                """WITH latest_revaluable_study AS (
+                       SELECT study_id
+                       FROM studies
+                       WHERE project_id = ?
+                         AND study_confidence_tier IN ('definitive', 'indicative')
+                       ORDER BY CASE WHEN study_date IS NULL OR study_date <= date('now')
+                                     THEN 0 ELSE 1 END,
+                                study_date DESC
+                       LIMIT 1
+                   )
+                   SELECT r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
+                          r.annual_production, r.annual_production_unit,
+                          r.mine_life_years, r.discount_rate_pct, r.tax_rate_pct,
+                          r.annuity_factor, r.npv_dfs, r.npv_spot,
+                          r.npv_uplift, r.npv_uplift_pct,
+                          r.method_version, r.warnings, r.computed_at,
+                          r.study_confidence_tier,
+                          cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
+                          s.reporting_currency
+                   FROM revaluations r
+                   JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
+                   JOIN studies s ON s.study_id = r.study_id
+                   WHERE r.study_id = (SELECT study_id FROM latest_revaluable_study)
+                     AND r.study_confidence_tier IN ('definitive', 'indicative')
+                   ORDER BY r.computed_at DESC LIMIT 1""",
+                (pid,),
+            ).fetchone()
             if reval_row:
                 warnings = []
                 if reval_row["warnings"]:

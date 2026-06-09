@@ -9,6 +9,7 @@ Usage:
 """
 
 import logging
+import re
 import sqlite3
 
 from datetime import datetime, timezone
@@ -266,6 +267,18 @@ def check_study_review_flags(pre_tax_npv, post_tax_npv, tax_rate_pct,
     return (len(reasons) > 0, "; ".join(reasons) if reasons else None)
 
 
+# Tier implied by an announcement title. Short tokens (pea/dfs/pfs/bfs) MUST be
+# matched on word boundaries — bare-substring "pea" matched Peak/Appears/repeat and
+# silently routed real DFS announcements to conceptual, killing their revaluation.
+# Precedence stays conceptual -> indicative -> definitive (first match wins).
+_HDR_CONCEPTUAL = re.compile(r"\b(scoping|pea)\b", re.IGNORECASE)
+_HDR_INDICATIVE = re.compile(r"\b(pre[-\s]?feasibility|prefeasibility|pfs)\b", re.IGNORECASE)
+_HDR_DEFINITIVE = re.compile(
+    r"\b(definitive\s+feasibility|dfs|bfs|bankable\s+feasibility|feasibility\s+study)\b",
+    re.IGNORECASE,
+)
+
+
 def header_stage_tier(header: str | None) -> str | None:
     """Confidence tier implied by a document header/title, or None if generic.
 
@@ -275,12 +288,11 @@ def header_stage_tier(header: str | None) -> str | None:
     """
     if not header:
         return None
-    h = header.lower()
-    if "scoping" in h or "pea" in h:
+    if _HDR_CONCEPTUAL.search(header):
         return "conceptual"
-    if "pre-feasibility" in h or "prefeasibility" in h or "pre feasibility" in h or "pfs" in h:
+    if _HDR_INDICATIVE.search(header):
         return "indicative"
-    if "definitive feasibility" in h or "dfs" in h or "feasibility study" in h or "bankable" in h:
+    if _HDR_DEFINITIVE.search(header):
         return "definitive"
     return None
 
@@ -299,8 +311,14 @@ def normalize_annual_production(value, unit):
         return None, None
     if not unit:
         return value, None
-    key = unit.strip().lower().split("/")[0].strip()
-    mult = _PROD_UNIT_MULT.get(key)
+    # Tokenize on whitespace and '/', take the first recognised unit token. This
+    # handles a magnitude prefix followed by a stuck-on word: "kt Cu", "koz pa",
+    # "Mt/yr". Falls back to raw value when no token is a known unit.
+    mult = None
+    for tok in unit.strip().lower().replace("/", " ").split():
+        if tok in _PROD_UNIT_MULT:
+            mult = _PROD_UNIT_MULT[tok]
+            break
     if mult is None:
         return value, None
     if mult != 1:

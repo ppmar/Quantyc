@@ -341,3 +341,45 @@ def test_revalue_blocks_conceptual_by_header(test_db):
     sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
     with pytest.raises(RevaluationError, match=r"not_revaluable_tier:conceptual_by_header"):
         revalue_study(test_db, sid)
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_study_cu_kt_magnitude_net(mock_yahoo, test_db):
+    """Cu production 45 (t) is an implausible kt mislabel -> scaled to 45000 t."""
+    test_db.execute("UPDATE project_commodities SET commodity = 'Cu' WHERE project_id = 1")
+    test_db.commit()
+    price_deck = json.dumps([{"commodity": "Cu", "price": 3.5, "unit": "USD/lb"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_date, mine_life_years,
+            annual_production, recovery_pct, post_tax_npv, discount_rate_pct, tax_rate_pct,
+            assumed_price_deck, reporting_currency)
+        VALUES (?, 'DFS', '2024-06-15', 10.0, 45.0, 90.0, 500.0, 8.0, 30.0, ?, 'USD')
+    """, (1, price_deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    mock_yahoo.side_effect = lambda s: Decimal("4.5") if s == "HG=F" else (_ for _ in ()).throw(ValueError(s))
+    rid = revalue_study(test_db, sid)
+    row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (rid,)).fetchone()
+    assert row["annual_production"] == 45000.0
+    assert row["annual_production_unit"] == "t"
+    assert row["npv_uplift"] > 0
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_study_cu_normal_t_not_scaled(mock_yahoo, test_db):
+    """A normal Cu figure (45000 t) is left untouched by the net."""
+    test_db.execute("UPDATE project_commodities SET commodity = 'Cu' WHERE project_id = 1")
+    test_db.commit()
+    price_deck = json.dumps([{"commodity": "Cu", "price": 3.5, "unit": "USD/lb"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_date, mine_life_years,
+            annual_production, recovery_pct, post_tax_npv, discount_rate_pct, tax_rate_pct,
+            assumed_price_deck, reporting_currency)
+        VALUES (?, 'DFS', '2024-06-15', 10.0, 45000.0, 90.0, 500.0, 8.0, 30.0, ?, 'USD')
+    """, (1, price_deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    mock_yahoo.side_effect = lambda s: Decimal("4.5") if s == "HG=F" else (_ for _ in ()).throw(ValueError(s))
+    rid = revalue_study(test_db, sid)
+    row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (rid,)).fetchone()
+    assert row["annual_production"] == 45000.0

@@ -8,6 +8,13 @@ def test_header_stage_tier():
     assert header_stage_tier("Kathleen Valley Lithium Project DFS Update") == "definitive"
     assert header_stage_tier("Investor Presentation") is None
     assert header_stage_tier(None) is None
+    # D1 regression: short tokens must not match inside words.
+    assert header_stage_tier("Peak Hill DFS Results") == "definitive"
+    assert header_stage_tier("Gold Appears Robust - DFS Update") == "definitive"
+    assert header_stage_tier("Repeat Resource at Telescope") is None
+    assert header_stage_tier("Robex PEA Results") == "conceptual"
+    # precedence preserved
+    assert header_stage_tier("Pre-Feasibility Study Confirms") == "indicative"
 
 
 def test_normalize_annual_production():
@@ -22,6 +29,12 @@ def test_normalize_annual_production():
     # warning emitted only when scaled
     assert normalize_annual_production(187.4, "koz")[1] is not None
     assert normalize_annual_production(250000, "oz")[1] is None
+    # D3: magnitude prefix + stuck-on word/unit
+    assert normalize_annual_production(45, "kt Cu")[0] == 45000
+    assert normalize_annual_production(150, "koz pa")[0] == 150000
+    assert normalize_annual_production(2, "Mt/yr")[0] == 2000000
+    assert normalize_annual_production(45, "kt/annum")[0] == 45000
+    assert normalize_annual_production(45, "kt Cu")[1] == "production_normalized_kt Cu_x1000"
 
 
 def _mk_conn():

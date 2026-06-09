@@ -100,6 +100,16 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
                         study_id, annual_prod)
         annual_prod = annual_prod * 1_000_000
 
+    # Copper contained-metal production is in tonnes; a DFS/PFS-stage project is
+    # never below ~thousands of t/yr. A Cu figure < 100 t is a kt mislabel the
+    # deterministic unit parse (orchestrator.normalize_annual_production) missed —
+    # unit absent/unknown, or a legacy row persisted before that fix. Scale x1000.
+    # 100 t/yr Cu ~= 0.22 Mlb/yr: safe floor, touches no real study.
+    if commodity == "Cu" and annual_prod is not None and annual_prod < 100:
+        logger.warning("Study %d: annual_production=%.1f t looks like kt, multiplying by 1000",
+                        study_id, annual_prod)
+        annual_prod = annual_prod * 1000
+
     # Extract DFS price assumption for primary commodity
     price_deck = json.loads(study["assumed_price_deck"] or "[]")
     price_dfs = None

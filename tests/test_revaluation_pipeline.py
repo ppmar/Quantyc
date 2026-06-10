@@ -383,3 +383,21 @@ def test_revalue_study_cu_normal_t_not_scaled(mock_yahoo, test_db):
     rid = revalue_study(test_db, sid)
     row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (rid,)).fetchone()
     assert row["annual_production"] == 45000.0
+
+
+def test_revalue_blocks_polymetallic(test_db):
+    """A project with >1 primary commodity can't be valued by the single-commodity
+    model -> not_revaluable_polymetallic (CHN Gonneville case)."""
+    test_db.execute("INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (1, 'Cu', 1)")
+    test_db.commit()  # project 1 now has Au* + Cu* (both primary)
+    price_deck = json.dumps([{"commodity": "Au", "price": 1800.0, "unit": "USD/oz"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date,
+            mine_life_years, annual_production, recovery_pct, post_tax_npv, discount_rate_pct,
+            tax_rate_pct, assumed_price_deck, reporting_currency)
+        VALUES (1,'DFS','definitive','2024-06-15',10.0,150000.0,90.0,400.0,8.0,30.0,?, 'USD')
+    """, (price_deck,))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    with pytest.raises(RevaluationError, match=r"not_revaluable_polymetallic"):
+        revalue_study(test_db, sid)

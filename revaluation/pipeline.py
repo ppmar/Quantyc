@@ -66,6 +66,16 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     if tier not in ("definitive", "indicative"):
         raise RevaluationError(f"not_revaluable_tier:{tier}")
 
+    # Polymetallic guard: a project with >1 primary commodity cannot be valued by the
+    # single-commodity first-order model — the metal it would pick is arbitrary and the
+    # number misrepresents the basket (CHN Gonneville Ni-Cu-PGE-Au). Block it.
+    n_primary = conn.execute(
+        "SELECT COUNT(*) FROM project_commodities WHERE project_id = ? AND is_primary = 1",
+        (study["project_id"],),
+    ).fetchone()[0]
+    if n_primary > 1:
+        raise RevaluationError("not_revaluable_polymetallic")
+
     commodity = study["commodity"]
     if commodity not in SUPPORTED_COMMODITIES:
         logger.info("Skipping study %d: commodity %s not supported by POC", study_id, commodity)

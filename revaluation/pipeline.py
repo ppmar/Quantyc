@@ -15,7 +15,9 @@ from revaluation.math import (
     RevaluationInput,
     SUPPORTED_COMMODITIES,
     revalue,
+    apply_production_magnitude_heuristic,
     normalize_cu_price_to_per_lb,
+    normalize_tax_rate_pct,
     RevaluationError,
 )
 from parsers.dfs_study_schemas import _TIER_BY_TYPE
@@ -96,29 +98,17 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # Production unit: oz for Au/Ag, t for Cu (per LLM prompt instructions)
     production_unit = "oz" if commodity in ("Au", "Ag") else "t"
 
-    # Sanity check: if Au production < 1000, Gemini likely reported in koz.
+    # Magnitude heuristics (koz/Moz/kt mislabels) — pure function, and the
+    # warning is persisted with the row, not just logged.
+    production_warning = None
     annual_prod = study["annual_production"]
-    if commodity == "Au" and annual_prod is not None and annual_prod < 1000:
-        logger.warning("Study %d: annual_production=%.1f oz looks like koz, multiplying by 1000",
-                        study_id, annual_prod)
-        annual_prod = annual_prod * 1000
-
-    # Silver DFSs report production in Moz; the math needs absolute oz. Any
-    # silver figure < 1000 is Moz (no mine produces sub-1000 oz/yr) -> x1e6.
-    if commodity == "Ag" and annual_prod is not None and annual_prod < 1000:
-        logger.warning("Study %d: annual_production=%.3f oz looks like Moz, multiplying by 1e6",
-                        study_id, annual_prod)
-        annual_prod = annual_prod * 1_000_000
-
-    # Copper contained-metal production is in tonnes; a DFS/PFS-stage project is
-    # never below ~thousands of t/yr. A Cu figure < 100 t is a kt mislabel the
-    # deterministic unit parse (orchestrator.normalize_annual_production) missed —
-    # unit absent/unknown, or a legacy row persisted before that fix. Scale x1000.
-    # 100 t/yr Cu ~= 0.22 Mlb/yr: safe floor, touches no real study.
-    if commodity == "Cu" and annual_prod is not None and annual_prod < 100:
-        logger.warning("Study %d: annual_production=%.1f t looks like kt, multiplying by 1000",
-                        study_id, annual_prod)
-        annual_prod = annual_prod * 1000
+    if annual_prod is not None:
+        scaled, production_warning = apply_production_magnitude_heuristic(
+            commodity, Decimal(str(annual_prod))
+        )
+        if production_warning:
+            logger.warning("Study %d: %s", study_id, production_warning)
+        annual_prod = scaled
 
     # Extract DFS price assumption for primary commodity
     price_deck = json.loads(study["assumed_price_deck"] or "[]")
@@ -178,6 +168,12 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
             logger.warning("Study %d: unparseable production_start_date=%r, treating as developer",
                            study_id, start_raw)
 
+    # Tax rate: `is not None` (0 is a real rate, not "missing") + fraction guard.
+    tax_raw = study["tax_rate_pct"]
+    tax_rate_pct, tax_warning = normalize_tax_rate_pct(
+        Decimal(str(tax_raw)) if tax_raw is not None else None
+    )
+
     inp = RevaluationInput(
         commodity=commodity,
         price_dfs_usd=price_dfs,
@@ -186,7 +182,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         annual_production_unit=production_unit,
         mine_life_years=Decimal(str(study["mine_life_years"])),
         discount_rate_pct=Decimal(str(study["discount_rate_pct"])),
-        tax_rate_pct=Decimal(str(study["tax_rate_pct"])) if study["tax_rate_pct"] else None,
+        tax_rate_pct=tax_rate_pct,
         npv_dfs=Decimal(str(study["post_tax_npv"])),
         reporting_currency=study["reporting_currency"],
         fx_rate=fx_rate,
@@ -200,6 +196,10 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # (new deposits, mine-life upgrades) since, so `mine_life - elapsed` understates
     # the real remaining life and the depletion-adjusted uplift is too low. Flag it.
     warnings = list(result.warnings)
+    if production_warning:
+        warnings.append(production_warning)
+    if tax_warning:
+        warnings.append(tax_warning)
     if cu_price_warning:
         warnings.append(cu_price_warning)
     if aud_price_warning:

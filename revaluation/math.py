@@ -62,6 +62,59 @@ class RevaluationError(ValueError):
     """Inputs are invalid for revaluation."""
 
 
+def apply_production_magnitude_heuristic(
+    commodity: str,
+    annual_production: Decimal,
+) -> tuple[Decimal, Optional[str]]:
+    """Rescue magnitude-mislabelled annual production (koz/Moz/kt reported as
+    if absolute). Returns (value, warning_or_None); the warning MUST be
+    persisted with the revaluation row — a silent x1000 is an audit hole.
+
+    Au: no gold DFS produces < 1,000 oz/yr -> a figure < 1000 is koz, x1000.
+    Ag: figures < 100 are Moz (silver Moz decks run ~0.5–50), x1e6. The
+        100–999 band is ambiguous — koz reporters (100–999 koz) and Moz both
+        land there; a guess can be 1000x wrong, so refuse.
+    Cu: a DFS/PFS project is never below ~thousands of t/yr contained Cu ->
+        a figure < 100 is kt, x1000.
+    """
+    if commodity == "Au" and annual_production < 1000:
+        scaled = annual_production * 1000
+        return scaled, f"production_magnitude_scaled_Au_{annual_production}_x1000"
+    if commodity == "Ag":
+        if annual_production < 100:
+            scaled = annual_production * 1_000_000
+            return scaled, f"production_magnitude_scaled_Ag_{annual_production}_x1000000"
+        if annual_production < 1000:
+            raise RevaluationError(
+                f"ag_production_unit_ambiguous:{annual_production}_koz_or_moz"
+            )
+    if commodity == "Cu" and annual_production < 100:
+        scaled = annual_production * 1000
+        return scaled, f"production_magnitude_scaled_Cu_{annual_production}_x1000"
+    return annual_production, None
+
+
+def normalize_tax_rate_pct(
+    raw: Optional[Decimal],
+) -> tuple[Optional[Decimal], Optional[str]]:
+    """Guard an extracted tax rate before it reaches the math.
+
+    - None passes through (revalue() applies the default).
+    - 0 is kept (not defaulted): a genuine 0% must not be falsy-coerced to 30%.
+    - 0 < raw < 1 is a fraction mislabelled as percent (LLM returning 0.30 for
+      "30%"): scale x100. Real sub-1% corporate tax rates do not exist.
+    Returns (rate_pct, warning_or_None).
+    """
+    if raw is None:
+        return None, None
+    if raw == 0:
+        return Decimal("0"), "tax_rate_zero_pct_kept"
+    if raw < 1:
+        scaled = (raw * 100).quantize(Decimal("0.1"))
+        return scaled, f"tax_rate_fraction_scaled_{raw}_to_{scaled}pct"
+    return raw, None
+
+
 def annuity_factor(discount_rate_pct: Decimal, mine_life_years: Decimal) -> Decimal:
     """Standard annuity factor: A = (1 - (1+r)^-n) / r."""
     if discount_rate_pct <= 0:
@@ -227,6 +280,14 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
 
     if abs(npv_uplift_pct) > EXTREME_UPLIFT_RATIO:
         warnings.append(f"extreme_uplift_check_inputs:{npv_uplift_pct.quantize(Decimal('0.1'))}")
+
+    # Known first-order biases — declared on every result so downstream signal
+    # confidence is honest (royalty/stream terms are not extracted yet, and a
+    # developer's annuity starts at year 1 while the DFS schedules production
+    # after a multi-year build: uplift overstated ~(1+r)^build_years).
+    warnings.append("royalty_not_netted_uplift_gross_of_royalties")
+    if inp.production_elapsed_years is None:
+        warnings.append("developer_pre_production_timing_not_discounted")
 
     return RevaluationResult(
         annuity_factor=a,

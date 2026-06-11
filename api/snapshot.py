@@ -35,6 +35,21 @@ def _load_meta() -> dict[str, dict]:
 
 # ── Formatting helpers ───────────────────────────────────────────────────
 
+def compute_runway_display(cash: float | None, burn: float | None) -> str | None:
+    """Runway from cash and quarterly_opex_burn.
+
+    Burn sign convention (matches pipeline.extractors.appendix_5b):
+        positive burn = cash outflow (the normal explorer case) -> runway
+        negative burn = net operating inflow -> "Net cash positive"
+    """
+    if not cash or not burn:
+        return None
+    if burn > 0:
+        quarters = cash / burn
+        return f"~{quarters:.0f} quarters of runway"
+    return "Net cash positive"
+
+
 def _fmt_aud(val: float | None) -> str | None:
     if val is None:
         return None
@@ -230,13 +245,7 @@ def api_company_snapshot(ticker: str):
         as_of = latest_cash_row["effective_date"]
 
         # Runway
-        runway_display = None
-        if cash_val and burn and burn < 0:
-            quarters = cash_val / abs(burn)
-            runway_display = f"~{quarters:.0f} quarters of runway"
-        elif cash_val and burn and burn > 0:
-            # positive burn means net inflow
-            runway_display = "Net cash positive"
+        runway_display = compute_runway_display(cash_val, burn)
 
         # Prose
         prose_parts = []

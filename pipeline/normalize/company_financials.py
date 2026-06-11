@@ -44,11 +44,20 @@ def _already_normalized(conn, document_id: int) -> bool:
     return row is not None
 
 
+# Sentinel: field not applicable to this document type (e.g. a 5B carries no
+# share counts) — exempt from the missing-field check, unlike an actual None.
+_NA = object()
+
+
 def _check_review_flags(
-    conn, company_id: int, cash: float | None,
-    shares_fd: float | None, opex_burn: float | None,
+    conn, company_id: int, cash: object = _NA,
+    shares_fd: object = _NA, opex_burn: object = _NA,
 ) -> tuple[bool, str | None]:
-    """Build review reasons (informational only). Never blocks ingestion."""
+    """Build review reasons. Sets needs_review; never blocks ingestion.
+
+    Pass only the fields the source document is expected to provide; omitted
+    fields are exempt from the missing-field check.
+    """
     reasons = []
 
     if shares_fd is None:
@@ -70,13 +79,13 @@ def _check_review_flags(
     if prior:
         for field, new_val in [("cash", cash), ("shares_fd", shares_fd), ("quarterly_opex_burn", opex_burn)]:
             old_val = prior[field] if field != "quarterly_opex_burn" else prior["quarterly_opex_burn"]
-            if new_val is not None and old_val is not None and old_val != 0:
+            if new_val is not _NA and new_val is not None and old_val is not None and old_val != 0:
                 deviation = abs(new_val - old_val) / abs(old_val)
                 if deviation > 0.5:
                     reasons.append(f"{field}_50pct_deviation")
 
-    # Always return needs_review=False — flags are logged but don't block
-    return False, "; ".join(reasons) if reasons else None
+    # needs_review marks the row for human inspection; ingestion is never blocked.
+    return bool(reasons), "; ".join(reasons) if reasons else None
 
 
 def normalize_from_5b(document_id: int) -> bool:
@@ -138,7 +147,7 @@ def normalize_from_5b(document_id: int) -> bool:
     invest_burn = stg["quarterly_invest_burn"]
 
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, cash, None, opex_burn
+        conn, company_id, cash=cash, opex_burn=opex_burn
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -213,7 +222,7 @@ def normalize_from_securities(document_id: int) -> bool:
     effective_date = effective_date or announcement_date
 
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, None, shares_fd, None
+        conn, company_id, shares_fd=shares_fd
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -285,7 +294,7 @@ def normalize_from_presentation(document_id: int) -> bool:
         shares_fd = shares_basic + (options or 0) + (perf_rights or 0)
 
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, cash, shares_fd, None
+        conn, company_id, cash=cash, shares_fd=shares_fd
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -346,8 +355,15 @@ def normalize_from_2a(document_id: int, capital_structure, source_profile: str =
     announcement_date = doc["announcement_date"] or effective_date
 
     needs_review, review_reason = _check_review_flags(
-        conn, company_id, None, cs.shares_fd_naive, None
+        conn, company_id, shares_fd=cs.shares_fd_naive
     )
+
+    # Naive FD adds CN face counts 1:1; one note can convert into hundreds of
+    # shares, so FD is unreliable until conversion terms are extracted.
+    if cs.convertible_notes_face_count:
+        needs_review = True
+        cn_reason = "cn_present_fd_unreliable"
+        review_reason = f"{review_reason}; {cn_reason}" if review_reason else cn_reason
 
     now = datetime.now(timezone.utc).isoformat()
 

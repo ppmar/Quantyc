@@ -92,7 +92,11 @@ def test_revalue_gold_aud_reporting():
     assert abs(result.npv_uplift - Decimal("2412.74")) < Decimal("0.10")
     assert abs(result.delta_revenue_annual_usd - Decimal("288000000")) < Decimal("1")
     assert result.method_version == "first_order_v3"
-    assert result.warnings == []
+    # Only the always-on honesty warnings; no data-quality warnings.
+    assert result.warnings == [
+        "royalty_not_netted_uplift_gross_of_royalties",
+        "developer_pre_production_timing_not_discounted",
+    ]
 
 
 def test_revalue_gold_usd_reporting_magnitude():

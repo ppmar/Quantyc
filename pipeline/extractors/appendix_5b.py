@@ -285,12 +285,22 @@ def _find_row_in_table(table: list[list[str]], row_ref: str) -> list[str] | None
 
 
 def _get_numeric_cells(row: list[str]) -> list[float | None]:
-    """Extract numeric values from the rightmost cells of a table row."""
+    """Extract numeric values from a table row, skipping the item-reference
+    cell (row[0], e.g. "1.9") which would otherwise parse as a number."""
     values = []
-    for cell in reversed(row):
+    for cell in reversed(row[1:]):
         val = _parse_amount(str(cell) if cell else "")
         values.insert(0, val)
     return values
+
+
+def _debt_from_facility_values(values: list[float]) -> float | None:
+    """Section 7 rows carry (total facility, amount drawn). Debt is the DRAWN
+    amount only — an undrawn facility is not debt. A single number is ambiguous
+    (usually the total): refuse rather than overstate EV."""
+    if len(values) >= 2:
+        return values[-1]
+    return None
 
 
 def _extract_from_tables(pdf_bytes: bytes, start_page: int) -> dict:
@@ -403,11 +413,9 @@ def _extract_from_tables(pdf_bytes: bytes, start_page: int) -> dict:
             if row:
                 nums = _get_numeric_cells(row)
                 non_none = [v for v in nums if v is not None]
-                if len(non_none) >= 2:
-                    # Column 1 = total facility, Column 2 = amount drawn
-                    results["debt"] = non_none[-1]  # amount drawn
-                elif non_none:
-                    results["debt"] = non_none[0]
+                drawn = _debt_from_facility_values(non_none)
+                if drawn is not None:
+                    results["debt"] = drawn
                 break
         if "debt" in results:
             break
@@ -446,8 +454,8 @@ def _build_item_pattern(item: str) -> re.Pattern:
     return re.compile(
         escaped
         + r"\s+.*?"                                     # label text
-        + r"(\(?\d[\d,]*\.?\d*\)?)"                     # first number (current quarter)
-        + r"(?:\s+(\(?\d[\d,]*\.?\d*\)?))?",            # optional second number (YTD)
+        + r"(\(?-?\d[\d,]*\.?\d*\)?)"                   # first number (current quarter)
+        + r"(?:\s+(\(?-?\d[\d,]*\.?\d*\)?))?",          # optional second number (YTD)
         re.I,
     )
 
@@ -465,8 +473,8 @@ _REGEX_PATTERNS = {
 # More specific pattern for 2.1(d) exploration & evaluation
 _REGEX_21D = re.compile(
     r"2\.1\s*\(?\s*d\s*\)?\s+.*?"
-    r"(\(?\d[\d,]*\.?\d*\)?)"
-    r"(?:\s+(\(?\d[\d,]*\.?\d*\)?))?",
+    r"(\(?-?\d[\d,]*\.?\d*\)?)"
+    r"(?:\s+(\(?-?\d[\d,]*\.?\d*\)?))?",
     re.I,
 )
 
@@ -521,11 +529,12 @@ def _extract_from_text(full_text: str) -> dict:
     if m:
         results["cash"] = _parse_amount(m.group(1))
 
-    # Debt from section 7
+    # Debt from section 7 — drawn column only; a lone number is the facility
+    # total, not debt (see _debt_from_facility_values).
     for key in ("facility_total", "loan_total"):
         m = _REGEX_PATTERNS[key].search(full_text)
-        if m:
-            drawn = _parse_amount(m.group(2)) if m.group(2) else _parse_amount(m.group(1))
+        if m and m.group(2):
+            drawn = _parse_amount(m.group(2))
             if drawn and drawn > 0:
                 results["debt"] = drawn
                 break
@@ -614,6 +623,39 @@ def _extract_all_fields(pdf_bytes: bytes) -> dict:
     return results
 
 
+# ── Amount finalization ─────────────────────────────────────────────
+
+def finalize_5b_amounts(results: dict) -> dict:
+    """Convert raw extracted 5B figures (A$'000, cashflow sign) to storage form.
+
+    Sign convention for burn fields:
+        quarterly_opex_burn   = -(item 1.9 net operating cashflow) in dollars
+        quarterly_invest_burn = -(item 2.6 net investing cashflow) in dollars
+    so positive = cash going out (burning), negative = net inflow. The sign is
+    preserved — a positive operating cashflow (rare for an explorer; often a
+    misparse red flag) must stay distinguishable downstream.
+    """
+    def _k(key):  # A$'000 -> dollars, passthrough None
+        v = results.get(key)
+        return v * 1000 if v is not None else None
+
+    def _burn(key):  # cashflow -> burn (sign flipped), dollars
+        v = results.get(key)
+        return -v * 1000 if v is not None else None
+
+    return {
+        "effective_date": results.get("effective_date"),
+        "cash": _k("cash"),
+        "cash_beginning": _k("cash_beginning"),
+        "debt": _k("debt"),
+        "quarterly_opex_burn": _burn("operating"),
+        "quarterly_invest_burn": _burn("investing"),
+        "quarterly_financing": _k("financing"),
+        "exploration_evaluation": _burn("exploration_evaluation"),
+        "quarters_of_funding": results.get("quarters_of_funding"),
+    }
+
+
 # ── Public API ──────────────────────────────────────────────────────
 
 def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
@@ -649,45 +691,15 @@ def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
         _mark_doc_failed(document_id, "no_usable_data_after_gates")
         return None
 
-    # Convert from A$'000 to dollars
-    if cash is not None:
-        cash = cash * 1000
-    if opex is not None:
-        opex = abs(opex) * 1000  # store burn as positive
-    if invest is not None:
-        invest = abs(invest) * 1000
-
-    debt = results.get("debt")
-    if debt is not None:
-        debt = debt * 1000
-
-    # Additional fields (stored in raw_json for now)
-    financing = results.get("financing")
-    if financing is not None:
-        financing = financing * 1000
-
-    exploration_eval = results.get("exploration_evaluation")
-    if exploration_eval is not None:
-        exploration_eval = abs(exploration_eval) * 1000
-
-    cash_beginning = results.get("cash_beginning")
-    if cash_beginning is not None:
-        cash_beginning = cash_beginning * 1000
-
-    quarters_of_funding = results.get("quarters_of_funding")
-
-    # Build rich raw_json with all extracted fields
-    raw = {
-        "effective_date": results.get("effective_date"),
-        "cash": cash,
-        "cash_beginning": cash_beginning,
-        "debt": debt,
-        "quarterly_opex_burn": opex,
-        "quarterly_invest_burn": invest,
-        "quarterly_financing": financing,
-        "exploration_evaluation": exploration_eval,
-        "quarters_of_funding": quarters_of_funding,
-    }
+    # Convert A$'000 -> dollars and apply the signed-burn convention.
+    raw = finalize_5b_amounts(results)
+    cash = raw["cash"]
+    opex = raw["quarterly_opex_burn"]
+    invest = raw["quarterly_invest_burn"]
+    debt = raw["debt"]
+    financing = raw["quarterly_financing"]
+    exploration_eval = raw["exploration_evaluation"]
+    quarters_of_funding = raw["quarters_of_funding"]
 
     now = datetime.now(timezone.utc).isoformat()
 

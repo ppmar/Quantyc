@@ -142,6 +142,11 @@ def step3_rerun_revaluations(conn, dry_run: bool) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="report, write nothing")
+    parser.add_argument(
+        "--no-extract", action="store_true",
+        help="skip in-process re-extraction; leave reset docs 'classified' for "
+             "the orchestrator (use POST /api/orchestrate — survives SSH disconnect)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -159,7 +164,7 @@ def main() -> None:
     # Re-extract AFTER the cleanup pass so freshly written rows (with correct
     # reasons from the fixed normalizer) are not touched by step 2.
     extract_stats = None
-    if doc_ids and not args.dry_run:
+    if doc_ids and not args.dry_run and not args.no_extract:
         from pipeline.orchestrator import extract_classified
         extract_stats = extract_classified()
 

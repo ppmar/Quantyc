@@ -111,6 +111,27 @@ def _parse_date(text: str) -> str | None:
     return None
 
 
+_CDI_RE = re.compile(r"chess\s+depositary\s+interest|\bCDI\b", re.I)
+_CDI_RATIO_RE = re.compile(r"(\d+)\s*:\s*(\d+)")
+
+
+def cdi_underlying_shares(description: str, count: float) -> tuple[float, str | None]:
+    """Convert a CDI count to underlying shares using the ratio in the
+    description ("10:1" = 10 CDIs per share). Non-CDI rows pass through.
+    A CDI row without a stated ratio is assumed 1:1 and flagged — the
+    assumption, not the number, is the risk."""
+    if not _CDI_RE.search(description):
+        return count, None
+    m = _CDI_RATIO_RE.search(description)
+    if not m:
+        return count, "cdi_ratio_unknown_assumed_1:1"
+    cdis_per_share, shares_per = int(m.group(1)), int(m.group(2))
+    if cdis_per_share == shares_per:
+        return count, None
+    shares = count * shares_per / cdis_per_share
+    return shares, f"cdi_ratio_{cdis_per_share}:{shares_per}_count_{count:.0f}_shares_{shares:.0f}"
+
+
 def _classify_security(description: str) -> str:
     """Classify a security description into a standard class."""
     if SHARES_DESCRIPTIONS.search(description):
@@ -170,6 +191,7 @@ def _extract(pages: list[str]) -> dict | None:
     total_options = 0
     total_perf_rights = 0
     found_any = False
+    extraction_warnings: list[str] = []
 
     for m in PART4_LINE.finditer(part4_text):
         code = m.group(1)
@@ -182,6 +204,10 @@ def _extract(pages: list[str]) -> dict | None:
         security_class = _classify_security(description)
 
         if security_class == "ordinary":
+            # CDIs convert to underlying shares by their ratio (10:1 etc.)
+            count, cdi_warning = cdi_underlying_shares(description, count)
+            if cdi_warning:
+                extraction_warnings.append(cdi_warning)
             total_shares += count
             found_any = True
         elif security_class == "option":
@@ -203,6 +229,7 @@ def _extract(pages: list[str]) -> dict | None:
         "issue_price": issue_price,
         "converted_from": converted_from,
         "converted_to": converted_to,
+        "extraction_warnings": extraction_warnings,
     }
 
     return result

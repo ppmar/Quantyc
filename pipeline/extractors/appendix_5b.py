@@ -424,8 +424,9 @@ def _extract_from_tables(pdf_bytes: bytes, start_page: int) -> dict:
     for table in all_tables:
         row = _find_row_in_table(table, "8.7")
         if row:
-            # 8.7 can be a number, "N/A", or "> 50"
-            for cell in reversed(row):
+            # 8.7 can be a number, "N/A", or "> 50". Skip the ref cell (row[0])
+            # so "8.7" itself can never be read as the value.
+            for cell in reversed(row[1:]):
                 cell_str = str(cell).strip() if cell else ""
                 if not cell_str:
                     continue
@@ -478,9 +479,12 @@ _REGEX_21D = re.compile(
     re.I,
 )
 
-# Runway pattern: "8.7 ... N quarters"
+# Runway pattern: "8.7 Estimated quarters of funding available (Item 8.6
+# divided by Item 8.5) <value>". The parenthesised label must be skipped
+# explicitly or the lazy match captures "8.6" as the value on every form.
 _REGEX_87 = re.compile(
-    r"8\.7\s+.*?"
+    r"8\.7\s+[^\n(]*?"
+    r"(?:\([^)\n]*\))?\s*"
     r"([\d,]+\.?\d*|N/?A|not applicable|nil|>\s*\d+)",
     re.I,
 )

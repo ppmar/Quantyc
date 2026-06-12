@@ -355,9 +355,10 @@ def _persist_study(doc_id, ticker, result, model_name):
         # Dedup: skip if same project already has a study with same stage and NPV
         study_date_str = result.effective_date.isoformat() if result.effective_date else None
         npv_val = float(result.post_tax_npv_millions) if result.post_tax_npv_millions else None
+        # `IS ?` so a NULL NPV deduplicates too (= ? never matches NULL).
         existing_study = conn.execute(
             """SELECT study_id FROM studies
-               WHERE project_id = ? AND study_stage = ? AND post_tax_npv = ?""",
+               WHERE project_id = ? AND study_stage = ? AND post_tax_npv IS ?""",
             (project_id, result.study_type, npv_val),
         ).fetchone()
         if existing_study:

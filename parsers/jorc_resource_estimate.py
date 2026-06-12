@@ -669,23 +669,48 @@ _GRADE_RANGES: dict[str, tuple[float, float]] = {
 }
 
 
+# Pure (non-overlapping) categories: only these may be summed against the
+# grand Total. Combo rows (Measured+Indicated), Sub-totals, In-situ Total and
+# Stockpiles are roll-ups of the same tonnes — summing them double-counts.
+_PURE_CATEGORIES = {"Measured", "Indicated", "Inferred", "Proven", "Probable"}
+
+# Contained-metal unit -> multiplier to a base unit (oz for g/t grades,
+# tonnes for % grades).
+_CONTAINED_TO_OZ = {"moz": 1_000_000.0, "koz": 1_000.0, "oz": 1.0}
+_CONTAINED_TO_T = {"mt": 1_000_000.0, "kt": 1_000.0, "t": 1.0,
+                   "mlb": 1_000_000.0 / 2204.62262, "klb": 1_000.0 / 2204.62262}
+_GRAMS_PER_OZ = 31.1035
+
+
+def _expected_contained(tonnes_mt, grade, grade_unit, contained_unit):
+    """Expected contained metal in the row's own unit, or None if the unit
+    combination isn't convertible."""
+    unit = (contained_unit or "").lower()
+    if grade_unit == "g/t" and unit in _CONTAINED_TO_OZ:
+        oz = float(tonnes_mt) * 1e6 * float(grade) / _GRAMS_PER_OZ
+        return oz / _CONTAINED_TO_OZ[unit]
+    if grade_unit == "%" and unit in _CONTAINED_TO_T:
+        t = float(tonnes_mt) * 1e6 * float(grade) / 100.0
+        return t / _CONTAINED_TO_T[unit]
+    return None
+
+
 def _validate_estimate(rows: list, commodity: str) -> list[str]:
     """Run post-extraction validation checks. Returns list of warnings."""
     warnings = []
 
-    # 1. Tonnes ordering: Total ≈ sum of categories
-    total_row = None
-    category_rows = []
-    for row in rows:
-        if row.category == "Total":
-            total_row = row
-        else:
-            category_rows.append(row)
+    # 1. Tonnes ordering: Total ≈ sum of PURE categories only. Multiple Total
+    # rows (one per pit/UG/oxide table) make a single-total comparison
+    # meaningless — skip with a warning instead of comparing garbage.
+    total_rows = [r for r in rows if r.category == "Total"]
+    category_rows = [r for r in rows if r.category in _PURE_CATEGORIES]
 
-    if total_row and total_row.tonnes_mt is not None and category_rows:
+    if len(total_rows) > 1:
+        warnings.append("multiple_total_rows_tonnes_check_skipped")
+    elif total_rows and total_rows[0].tonnes_mt is not None and category_rows:
         cat_sum = sum(r.tonnes_mt for r in category_rows if r.tonnes_mt is not None)
         if cat_sum > 0:
-            deviation = abs(float(total_row.tonnes_mt) - float(cat_sum)) / float(cat_sum)
+            deviation = abs(float(total_rows[0].tonnes_mt) - float(cat_sum)) / float(cat_sum)
             if deviation > 0.05:
                 warnings.append(f"total_tonnes_deviation_{deviation:.1%}")
 
@@ -699,18 +724,26 @@ def _validate_estimate(rows: list, commodity: str) -> list[str]:
                 if g < lo or g > hi:
                     warnings.append(f"grade_outlier_{row.category}_{g}")
 
-    # 3. Contained metal sanity (tonnes_mt × grade ≈ contained_metal)
+    # 3. Contained metal sanity: tonnes × grade ≈ contained, unit-aware for
+    # g/t→oz and %→t families. Catches column shifts and unit mislabels —
+    # the two ways a resource extraction goes silently wrong.
     for row in rows:
         if (
             row.tonnes_mt is not None
             and row.grade is not None
             and row.contained_metal is not None
-            and row.category != "Total"
         ):
-            # This is an approximation — unit conversion depends on commodity
-            # For gold (g/t → oz): tonnes_mt * 1e6 * grade_g_t / 31.1035 = oz
-            # We just check relative consistency between rows
-            pass  # Full unit-aware check deferred to future iteration
+            expected = _expected_contained(
+                row.tonnes_mt, row.grade, row.grade_unit, row.contained_metal_unit
+            )
+            if expected is None or expected == 0:
+                continue
+            ratio = float(row.contained_metal) / expected
+            if not (0.9 <= ratio <= 1.1):
+                warnings.append(
+                    f"contained_metal_mismatch_{row.category}_"
+                    f"got{row.contained_metal}_expected{expected:.3g}"
+                )
 
     return warnings
 

@@ -276,7 +276,15 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
 
     npv_spot = inp.npv_dfs + delta_npv_reporting_currency
     npv_uplift = npv_spot - inp.npv_dfs
-    npv_uplift_pct = (npv_uplift / inp.npv_dfs) if inp.npv_dfs != 0 else Decimal("0")
+    # Denominator |npv_dfs|: a negative study NPV must not flip the sign of
+    # the percentage. Zero NPV makes the % undefined — flag, don't hide.
+    if inp.npv_dfs == 0:
+        npv_uplift_pct = Decimal("0")
+        warnings.append("npv_dfs_zero_pct_undefined")
+    else:
+        npv_uplift_pct = npv_uplift / abs(inp.npv_dfs)
+        if inp.npv_dfs < 0:
+            warnings.append("npv_dfs_negative_pct_vs_abs")
 
     if abs(npv_uplift_pct) > EXTREME_UPLIFT_RATIO:
         warnings.append(f"extreme_uplift_check_inputs:{npv_uplift_pct.quantize(Decimal('0.1'))}")

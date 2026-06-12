@@ -6,6 +6,7 @@ each new DFS parsed.
 """
 import json
 import logging
+import re
 import sqlite3
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -29,6 +30,21 @@ logger = logging.getLogger(__name__)
 # (mine-life upgrades, new deposits) not in the study, so depletion off the old
 # mine_life understates remaining life. Surface a warning past this age.
 STALE_STUDY_YEARS = 3.0
+
+
+_AUD_UNIT_RE = re.compile(r"AUD|(?<![CU])A\$|\$A(?![A-Z$])", re.I)
+
+
+def is_aud_price_unit(unit: Optional[str]) -> bool:
+    """True when a price-deck unit string is Australian dollars.
+
+    Covers the three spellings ASX studies use — "AUD", "A$", "$A" — while
+    not matching US$/CA$/CAD. Spot is always USD, so an AUD deck must be
+    FX-converted before the price delta is taken.
+    """
+    if not unit:
+        return False
+    return bool(_AUD_UNIT_RE.search(unit.upper()))
 
 
 def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
@@ -147,7 +163,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # always USD. Without this an AUD deck is compared raw against USD spot
     # (BTR: A$5000/oz deck vs US$4365 spot -> bogus -54% uplift).
     aud_price_warning = None
-    if price_dfs_unit and ("AUD" in price_dfs_unit.upper() or "A$" in price_dfs_unit.upper()):
+    if is_aud_price_unit(price_dfs_unit):
         if fx_rate is None:
             fx_rate, fx_price_id = get_or_fetch_price(conn, "AUDUSD")
         price_dfs = price_dfs * fx_rate  # fx_rate = USD per AUD

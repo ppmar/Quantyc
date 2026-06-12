@@ -50,6 +50,25 @@ def compute_runway_display(cash: float | None, burn: float | None) -> str | None
     return "Net cash positive"
 
 
+def compute_burn_prose(burn: float | None, prior_burn: float | None) -> str | None:
+    """Cash-section prose for quarterly_opex_burn (positive = outflow).
+
+    A negative burn is an operating INFLOW and must not be called "Burn".
+    The up/down comparator only applies when both quarters have the same
+    sign — comparing a burn against an inflow magnitude is meaningless.
+    """
+    if burn is None or burn == 0:
+        return None
+    label = "Burn" if burn > 0 else "Operating inflow"
+    prose = f"{label} {_fmt_aud(abs(burn))} per quarter"
+    if prior_burn and (burn > 0) == (prior_burn > 0):
+        if abs(burn) > abs(prior_burn):
+            prose += f", up from {_fmt_aud(abs(prior_burn))} prior"
+        elif abs(burn) < abs(prior_burn):
+            prose += f", down from {_fmt_aud(abs(prior_burn))} prior"
+    return prose
+
+
 def _fmt_aud(val: float | None) -> str | None:
     if val is None:
         return None
@@ -249,16 +268,10 @@ def api_company_snapshot(ticker: str):
 
         # Prose
         prose_parts = []
-        if burn is not None:
-            prose_parts.append(f"Burn {_fmt_aud(abs(burn))} per quarter")
-            # Compare to prior
-            if len(cash_rows) >= 2:
-                prior_burn = cash_rows[-2]["quarterly_opex_burn"]
-                if prior_burn is not None and prior_burn != 0:
-                    if abs(burn) > abs(prior_burn):
-                        prose_parts[0] += f", up from {_fmt_aud(abs(prior_burn))} prior"
-                    elif abs(burn) < abs(prior_burn):
-                        prose_parts[0] += f", down from {_fmt_aud(abs(prior_burn))} prior"
+        prior_burn = cash_rows[-2]["quarterly_opex_burn"] if len(cash_rows) >= 2 else None
+        burn_prose = compute_burn_prose(burn, prior_burn)
+        if burn_prose:
+            prose_parts.append(burn_prose)
         if as_of:
             prose_parts.append(f"Treasury {_fmt_date_display(as_of)}")
 
@@ -352,7 +365,9 @@ def api_company_snapshot(ticker: str):
             if doc["cash"] is not None:
                 parts.append(f"Closed at {_fmt_aud(doc['cash'])} cash")
             if doc["quarterly_opex_burn"] is not None:
-                parts.append(f"Burn {_fmt_aud(abs(doc['quarterly_opex_burn']))}")
+                b = doc["quarterly_opex_burn"]
+                label = "Burn" if b > 0 else "Operating inflow"
+                parts.append(f"{label} {_fmt_aud(abs(b))}")
             detail = ". ".join(parts) + "." if parts else ""
         elif doc["doc_type"] in ("issue_of_securities", "placement"):
             if doc["shares_basic"] is not None:

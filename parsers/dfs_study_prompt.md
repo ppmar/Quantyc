@@ -78,6 +78,26 @@ do not stop there.
 only.** Never combine cases, and never put a high-price-case NPV into the pre-tax field while
 the base-case sits in post-tax — that fabricates an impossible tax gap.
 
+## Critical: price assumptions must be the BASE CASE deck — never a scenario
+
+Studies routinely present several pricing cases: a base/consensus case plus
+"spot", "high", "upside" or "sensitivity" cases, often only in footnotes
+(e.g. "#1 – Spot silver price of US$80/oz"). The downstream system revalues the
+study at TODAY's spot price, so the extracted deck must be the price the
+COMPANY's base-case NPV was computed at:
+
+- `price_assumptions` = the **base case / consensus case** prices ONLY.
+- A price labelled "spot", "current price", "sensitivity", "upside", "high
+  case" — or appearing only in a footnote next to a scenario NPV — must NEVER
+  go into `price_assumptions`.
+- `post_tax_npv_millions` / `pre_tax_npv_millions` and `price_assumptions`
+  must come from the SAME pricing case. Pairing a spot-case NPV with the
+  base-case deck (or vice versa) silently corrupts the revaluation.
+- If the document shows multiple pricing cases, add the warning
+  `multiple_price_scenarios_base_case_used`. If you cannot determine which
+  case is the base case, set the NPV fields and `price_assumptions` to null
+  and add `pricing_case_ambiguous`.
+
 ## Currency handling
 
 - `reporting_currency` is the currency of the NPV.
@@ -119,7 +139,7 @@ downstream system normalizes to absolute units using this — so the unit must b
 3. The "reporting_currency" is the currency of the headline NPV. If capex is in a different currency, normalize to reporting_currency ONLY if an explicit FX rate is given; otherwise add to extraction_warnings.
 4. Monetary values are in MILLIONS of reporting_currency. "$2.4 billion NPV" -> 2400.
 5. discount_rate_pct is REQUIRED — DFS always state their discount rate (e.g., 8.0 for "NPV8" or "NPV at 8%").
-6. project_name is the deposit/project name only (e.g., "Hemi", "Kathleen Valley", "Pilgangoora"). Strip trailing "Project", "Mine", "Deposit". Never use placeholder text.
+6. project_name is the deposit/project name only (e.g., "Hemi", "Kathleen Valley", "Pilgangoora"). Strip trailing "Project", "Mine", "Deposit" AND trailing commodity words — "Paris Silver Project" -> "Paris", "Rebecca-Roe Gold" -> "Rebecca-Roe". Keep scope words that denote a distinct sub-project (Underground, Expansion, Stage 2). Never use placeholder text. Use the SAME name the company uses across its announcements so repeated studies of one deposit land on one project.
 7. price_assumptions: extract base case prices used in the economic model. One entry per commodity. Include unit explicitly.
 8. study_type: see "Stage discrimination" above. Use the exact string that matches.
 9. extraction_warnings: include concerns like mixed currencies without FX, multiple scenarios where you picked base case, project_name ambiguity.

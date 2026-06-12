@@ -383,6 +383,11 @@ def _persist_study(doc_id, ticker, result, model_name):
         if eff_iso and ann and eff_iso > ann:
             warns_clamp = f"effective_date_after_announcement_clamped:{eff_iso}->{ann}"
             eff_iso = ann
+        elif eff_iso is None and ann:
+            # No 'as at' date in the study: fall back to the announcement date
+            # (an honest upper bound) so latest-study ordering and vintage work.
+            eff_iso = ann
+            warns_clamp = "study_date_from_announcement_date"
         else:
             warns_clamp = None
         _RANK = {"definitive": 0, "indicative": 1, "conceptual": 2}
@@ -610,17 +615,13 @@ def _is_junk_project_name(name: str) -> bool:
     return False
 
 
-def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
-    """Look up a project by (company_id, project_name) or create it.
+def normalize_project_name(project_name: str) -> str:
+    """Canonical project name for matching/merging.
 
-    Junk fragment names are not allowed to spawn new projects: if the company
-    already has a real (non-junk) project, attach to its most recent one instead.
+    Strips trailing qualifiers + commodity tokens so "Syama Gold Project" and
+    "Syama" map to one project (R6). Scope words (Underground, Sulphide,
+    Expansion, Stage N) are NOT stripped — they are real sub-projects.
     """
-    from datetime import datetime, timezone
-
-    # Case-insensitive match, strip trailing qualifiers + commodity tokens so
-    # "Syama Gold" and "Syama" map to one project (R6). Scope words (Underground,
-    # Sulphide, Expansion, Stage N) are NOT stripped — they are real sub-projects.
     import re
     clean_name = project_name
     for _ in range(3):  # strip repeated trailing tokens, e.g. "X Gold Project"
@@ -632,14 +633,33 @@ def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
         if new == clean_name:
             break
         clean_name = new
-    clean_name = clean_name or project_name.strip()
+    return clean_name or project_name.strip()
 
-    row = conn.execute(
-        """SELECT project_id FROM projects
-           WHERE company_id = ? AND LOWER(project_name) = LOWER(?)
-           ORDER BY created_at DESC LIMIT 1""",
-        (company_id, clean_name),
-    ).fetchone()
+
+def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
+    """Look up a project by (company_id, normalized name) or create it.
+
+    Both sides are normalized: a legacy stored "Paris Silver" must match an
+    incoming "Paris" (and vice versa) or the project forks and the same study
+    lands twice with different numbers (IVR Paris / RMS Rebecca-Roe bug).
+
+    Junk fragment names are not allowed to spawn new projects: if the company
+    already has a real (non-junk) project, attach to its most recent one instead.
+    """
+    from datetime import datetime, timezone
+
+    clean_name = normalize_project_name(project_name)
+    clean_lower = clean_name.lower()
+
+    row = None
+    for cand in conn.execute(
+        """SELECT project_id, project_name FROM projects
+           WHERE company_id = ? ORDER BY created_at DESC""",
+        (company_id,),
+    ).fetchall():
+        if normalize_project_name(cand["project_name"]).lower() == clean_lower:
+            row = cand
+            break
 
     if row:
         return row["project_id"]

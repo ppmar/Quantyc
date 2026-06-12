@@ -86,3 +86,24 @@ def test_suffixed_incoming_matches_clean_row():
     pid = _get_or_create_project(conn, cid, "Paris Silver Project")
     assert pid == pid_existing
     conn.close()
+
+
+# ── Compound commodity chains and company-name prefixes ───────────────
+
+def test_strips_compound_commodity_chain():
+    assert normalize_project_name("Gonneville PGE-Ni-Cu-Co-Au") == "Gonneville"
+    assert normalize_project_name("Gonneville Ni-Cu-PGE") == "Gonneville"
+
+
+def test_strips_company_prefix_when_known():
+    assert (
+        normalize_project_name(
+            "Vulcan Zero Carbon Lithium Phase One", company_name="Vulcan Energy Resources"
+        )
+        == "Zero Carbon Lithium Phase One"
+    )
+
+
+def test_company_prefix_not_stripped_when_name_is_just_the_prefix():
+    # Project literally named after the company word alone: keep it.
+    assert normalize_project_name("Vulcan", company_name="Vulcan Energy Resources") == "Vulcan"

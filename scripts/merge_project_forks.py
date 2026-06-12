@@ -31,9 +31,13 @@ def merge_forks(conn, dry_run: bool) -> dict:
 
     groups: dict[tuple[int, str], list] = defaultdict(list)
     for row in conn.execute(
-        "SELECT project_id, company_id, project_name FROM projects ORDER BY project_id"
+        """SELECT p.project_id, p.company_id, p.project_name, c.name AS company_name
+           FROM projects p JOIN companies c USING(company_id) ORDER BY p.project_id"""
     ).fetchall():
-        key = (row["company_id"], normalize_project_name(row["project_name"]).lower())
+        key = (
+            row["company_id"],
+            normalize_project_name(row["project_name"], row["company_name"]).lower(),
+        )
         groups[key].append(row)
 
     stats = {"groups_merged": 0, "projects_removed": 0, "studies_repointed": 0,
@@ -44,7 +48,7 @@ def merge_forks(conn, dry_run: bool) -> dict:
             continue
         keeper = rows[0]
         forks = rows[1:]
-        canonical = normalize_project_name(keeper["project_name"])
+        canonical = normalize_project_name(keeper["project_name"], keeper["company_name"])
         stats["groups_merged"] += 1
         logger.info(
             "Merging company %d %r: keeper #%d (%r), forks %s",

@@ -615,15 +615,30 @@ def _is_junk_project_name(name: str) -> bool:
     return False
 
 
-def normalize_project_name(project_name: str) -> str:
+def normalize_project_name(project_name: str, company_name: str | None = None) -> str:
     """Canonical project name for matching/merging.
 
     Strips trailing qualifiers + commodity tokens so "Syama Gold Project" and
-    "Syama" map to one project (R6). Scope words (Underground, Sulphide,
-    Expansion, Stage N) are NOT stripped — they are real sub-projects.
+    "Syama" map to one project (R6), trailing compound commodity chains
+    ("Gonneville PGE-Ni-Cu-Co-Au"), and — when the company name is known — a
+    leading company word ("Vulcan Zero Carbon Lithium ..."). Scope words
+    (Underground, Sulphide, Expansion, Stage N) are NOT stripped — they are
+    real sub-projects.
     """
     import re
     clean_name = project_name
+    # Leading company word: "Vulcan X" -> "X" when company is "Vulcan Energy ...".
+    if company_name:
+        first_word = company_name.strip().split()[0] if company_name.strip() else ""
+        if first_word and len(first_word) >= 3:
+            stripped = re.sub(rf"^{re.escape(first_word)}\s+", "", clean_name, flags=re.I)
+            if stripped and stripped != clean_name:
+                clean_name = stripped
+    # Trailing compound commodity chain: "X PGE-Ni-Cu-Co-Au", "X Ni-Cu-PGE".
+    _SYM = r"(?:PGE|Ni|Cu|Co|Au|Ag|Zn|Pb|Li|Sn|U|REE|Fe)"
+    clean_name = re.sub(
+        rf"\s+{_SYM}(?:\s*[-–/]\s*{_SYM})+\s*$", "", clean_name, flags=re.I
+    ).strip() or clean_name
     for _ in range(3):  # strip repeated trailing tokens, e.g. "X Gold Project"
         new = re.sub(
             r"\s+(?:Project|Deposit|Mine|Operations?|Limited|Ltd|"
@@ -648,7 +663,17 @@ def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
     """
     from datetime import datetime, timezone
 
-    clean_name = normalize_project_name(project_name)
+    # Company name refines normalization (leading company-word strip); its
+    # absence (minimal test schemas, legacy DBs) only weakens matching.
+    try:
+        co = conn.execute(
+            "SELECT name FROM companies WHERE company_id = ?", (company_id,)
+        ).fetchone()
+        company_name = co["name"] if co and co["name"] else None
+    except sqlite3.Error:
+        company_name = None
+
+    clean_name = normalize_project_name(project_name, company_name)
     clean_lower = clean_name.lower()
 
     row = None
@@ -657,7 +682,7 @@ def _get_or_create_project(conn, company_id: int, project_name: str) -> int:
            WHERE company_id = ? ORDER BY created_at DESC""",
         (company_id,),
     ).fetchall():
-        if normalize_project_name(cand["project_name"]).lower() == clean_lower:
+        if normalize_project_name(cand["project_name"], company_name).lower() == clean_lower:
             row = cand
             break
 

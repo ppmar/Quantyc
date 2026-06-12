@@ -90,6 +90,12 @@ COMPANY's base-case NPV was computed at:
 - A price labelled "spot", "current price", "sensitivity", "upside", "high
   case" — or appearing only in a footnote next to a scenario NPV — must NEVER
   go into `price_assumptions`.
+- **This holds even when the SPOT case is the headline.** Companies often lead
+  with the spot-case NPV ("Strong economics: NPV A$1,154m (Spot case
+  US$80/oz); Consensus case (US$60.18/oz): NPV A$618m"). The spot case is
+  ephemeral by definition — the deck to extract is the CONSENSUS/long-term
+  case, with its matching NPVs, regardless of presentation order or which
+  number the title quotes.
 - `post_tax_npv_millions` / `pre_tax_npv_millions` and `price_assumptions`
   must come from the SAME pricing case. Pairing a spot-case NPV with the
   base-case deck (or vice versa) silently corrupts the revaluation.

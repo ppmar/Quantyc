@@ -5,9 +5,9 @@ import { api, type IngestHealth } from "@/lib/api";
 
 function Card({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
   return (
-    <div className="rounded-sm border border-border p-4">
-      <p className="text-[11px] uppercase tracking-wider text-zinc-500">{label}</p>
-      <p className={`mt-1 text-2xl font-mono ${accent ?? "text-zinc-100"}`}>{value}</p>
+    <div className="q-card px-4 py-3.5">
+      <p className="q-label">{label}</p>
+      <p className={`mt-1.5 text-2xl font-mono ${accent ?? "text-zinc-100"}`}>{value}</p>
     </div>
   );
 }
@@ -42,13 +42,20 @@ export default function HealthPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-baseline justify-between">
-        <p className="text-xs uppercase tracking-wider text-zinc-500">Ingest Health</p>
+    <div className="space-y-5 animate-fade-up">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="q-display text-[28px] leading-none text-zinc-100">
+            Ingest health
+          </h1>
+          <p className="mt-1.5 text-[13px] text-zinc-500">
+            Coverage, failures and the retry queue
+          </p>
+        </div>
         <button
           onClick={onRetry}
           disabled={retrying}
-          className="h-8 rounded-sm border border-border px-3 text-[12px] text-amber hover:border-zinc-600 disabled:opacity-40"
+          className="q-control text-amber hover:text-amber disabled:opacity-40"
         >
           {retrying ? "Retrying…" : "Retry transient failures now"}
         </button>
@@ -69,10 +76,10 @@ export default function HealthPage() {
       </div>
 
       <div>
-        <p className="mb-2 text-[11px] uppercase tracking-wider text-zinc-500">
+        <p className="mb-2 q-label">
           Error buckets (failed + retry-scheduled)
         </p>
-        <div className="overflow-x-auto -mx-2">
+        <div className="q-card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left">

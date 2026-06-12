@@ -43,20 +43,29 @@ export default function ReviewPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-baseline justify-between">
-        <p className="text-xs uppercase tracking-wider text-zinc-500">
-          Review Queue
+    <div className="space-y-5 animate-fade-up">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="q-display text-[28px] leading-none text-zinc-100">
+            Review queue
+          </h1>
+          <p className="mt-1.5 text-[13px] text-zinc-500">
+            Extractions flagged for human inspection
+          </p>
+        </div>
+        <p className="text-[11px] font-mono text-zinc-600">
+          {items.length} flagged
         </p>
-        <p className="text-xs text-zinc-600">{items.length} flagged</p>
       </div>
 
       {items.length === 0 ? (
-        <p className="text-[13px] text-zinc-600 py-8">
-          No records flagged for review.
-        </p>
+        <div className="q-card px-8 py-14 text-center">
+          <p className="text-[13px] text-zinc-500">
+            No records flagged for review.
+          </p>
+        </div>
       ) : (
-        <div className="overflow-x-auto -mx-2">
+        <div className="q-card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left border-b border-border">

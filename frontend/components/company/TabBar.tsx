@@ -33,7 +33,7 @@ export function TabBar({
         >
           {tab.label}
           {active === tab.key && (
-            <span className="absolute bottom-0 left-0 right-0 h-px bg-zinc-100" />
+            <span className="absolute bottom-0 left-0 right-0 h-[2px] rounded-full bg-amber shadow-[0_0_8px_oklch(0.795_0.155_85/0.5)]" />
           )}
         </button>
       ))}

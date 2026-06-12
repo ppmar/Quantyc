@@ -147,53 +147,53 @@ function StudyCard({ study, suppressCommodities }: { study: StudyData; suppressC
         <StudyVintageBadge isoDate={study.study_date_iso ?? null} />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 overflow-hidden rounded-md border border-white/[0.05] divide-x divide-y divide-white/[0.04] [&>div]:px-3.5 [&>div]:py-2.5 [&>div]:bg-white/[0.015]">
         {study.post_tax_npv != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV{dr} post-tax</p>
-            <p className="text-sm text-zinc-200 font-medium">{fmtMoney(study.post_tax_npv, ccy)}</p>
+            <p className="q-label">NPV{dr} post-tax</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{fmtMoney(study.post_tax_npv, ccy)}</p>
           </div>
         )}
         {study.pre_tax_npv != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV{dr} pre-tax</p>
-            <p className="text-sm text-zinc-200 font-medium">{fmtMoney(study.pre_tax_npv, ccy)}</p>
+            <p className="q-label">NPV{dr} pre-tax</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{fmtMoney(study.pre_tax_npv, ccy)}</p>
           </div>
         )}
         {study.irr_pct != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">IRR</p>
-            <p className="text-sm text-zinc-200 font-medium">{fmtPct(study.irr_pct)}</p>
+            <p className="q-label">IRR</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{fmtPct(study.irr_pct)}</p>
           </div>
         )}
         {study.initial_capex != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Initial capex</p>
-            <p className="text-sm text-zinc-200 font-medium">{fmtMoney(study.initial_capex, ccy)}</p>
+            <p className="q-label">Initial capex</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{fmtMoney(study.initial_capex, ccy)}</p>
           </div>
         )}
         {study.aisc_per_unit != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">AISC</p>
-            <p className="text-sm text-zinc-200 font-medium">{fmtPerUnitUSD(study.aisc_per_unit, study.aisc_unit)}</p>
+            <p className="q-label">AISC</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{fmtPerUnitUSD(study.aisc_per_unit, study.aisc_unit)}</p>
           </div>
         )}
         {study.mine_life_years != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Mine life</p>
-            <p className="text-sm text-zinc-200 font-medium">{study.mine_life_years.toFixed(0)} years</p>
+            <p className="q-label">Mine life</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{study.mine_life_years.toFixed(0)} years</p>
           </div>
         )}
         {study.payback_years != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Payback</p>
-            <p className="text-sm text-zinc-200 font-medium">{study.payback_years.toFixed(1)} years</p>
+            <p className="q-label">Payback</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{study.payback_years.toFixed(1)} years</p>
           </div>
         )}
         {study.recovery_pct != null && (
           <div>
-            <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Recovery</p>
-            <p className="text-sm text-zinc-200 font-medium">{fmtPct(study.recovery_pct)}</p>
+            <p className="q-label">Recovery</p>
+            <p className="mt-1 font-mono text-sm text-zinc-100">{fmtPct(study.recovery_pct)}</p>
           </div>
         )}
       </div>
@@ -222,13 +222,52 @@ function signalColor(upliftPct: number) {
   return "text-red-400";
 }
 
-function signalBorderColor(upliftPct: number) {
-  if (upliftPct > 0.5) return "border-emerald-800";
-  if (upliftPct > 0.15) return "border-emerald-900";
-  if (upliftPct > 0) return "border-white/[0.06]";
-  if (upliftPct > -0.15) return "border-white/[0.06]";
-  if (upliftPct > -0.5) return "border-amber-900";
-  return "border-red-900";
+// Left signal rail color for the reval card.
+function signalRail(upliftPct: number) {
+  if (upliftPct > 0.15)
+    return "bg-emerald-400 shadow-[0_0_10px_oklch(0.72_0.19_145/0.5)]";
+  if (upliftPct > -0.15) return "bg-zinc-600";
+  if (upliftPct > -0.5)
+    return "bg-amber shadow-[0_0_10px_oklch(0.795_0.155_85/0.5)]";
+  return "bg-red-400 shadow-[0_0_10px_oklch(0.63_0.21_25/0.5)]";
+}
+
+function NPVBar({
+  label,
+  value,
+  max,
+  ccy,
+  emphasis,
+  barClass,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  ccy: string;
+  emphasis?: boolean;
+  barClass: string;
+}) {
+  const widthPct = max > 0 ? Math.max((Math.abs(value) / max) * 100, 2) : 2;
+  return (
+    <div className="flex items-center gap-3">
+      <span className="q-label w-24 shrink-0">{label}</span>
+      <div className="relative h-5 flex-1 overflow-hidden rounded-[3px] bg-white/[0.03]">
+        <div
+          className={`absolute inset-y-0 left-0 rounded-[3px] transition-[width] duration-700 ease-out ${barClass}`}
+          style={{ width: `${widthPct}%` }}
+        />
+      </div>
+      <span
+        className={`w-24 shrink-0 text-right font-mono text-[13px] tabular-nums ${
+          emphasis ? "text-zinc-100" : "text-zinc-500"
+        }`}
+      >
+        {value < 0 ? "-" : ""}
+        {ccy}
+        {Math.abs(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}M
+      </span>
+    </div>
+  );
 }
 
 function RevaluationCard({ reval }: { reval: RevaluationData }) {
@@ -240,93 +279,113 @@ function RevaluationCard({ reval }: { reval: RevaluationData }) {
   const upliftColor = lowBase ? "text-zinc-400" : signalColor(upliftPct);
   // Label the assumed price by the real study tier, not hardcoded "DFS" (I6).
   const assumedLabel =
-    reval.study_confidence_tier === "definitive" ? "DFS assumed"
-    : reval.study_confidence_tier === "indicative" ? "PFS assumed"
-    : "Study assumed";
+    reval.study_confidence_tier === "definitive" ? "DFS deck"
+    : reval.study_confidence_tier === "indicative" ? "PFS deck"
+    : "Study deck";
 
   const spotDate = reval.spot_fetched_at
     ? new Date(reval.spot_fetched_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
     : "";
 
+  const maxNPV = Math.max(Math.abs(reval.npv_dfs), Math.abs(reval.npv_spot));
+
   return (
-    <div className={`mt-4 border rounded-lg p-4 ${signalBorderColor(upliftPct)} bg-white/[0.02]`}>
-      <div className="flex items-center justify-between mb-3">
+    <div className="relative mt-5 overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.015] p-4 pl-5">
+      {/* signal rail */}
+      <span
+        className={`absolute left-0 top-0 bottom-0 w-[3px] ${signalRail(lowBase ? 0 : upliftPct)}`}
+      />
+
+      <div className="mb-4 flex items-start justify-between gap-4">
         <div className="flex items-center gap-1.5">
           <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
             Spot revaluation
           </h4>
           <MethodologyHint />
-        </div>
-        <div className="flex items-center gap-1.5">
           {lowBase && (
-            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">small base</span>
-          )}
-          <span className={`text-lg font-semibold tabular-nums ${upliftColor}`}>
-            {upliftPct >= 0 ? "+" : ""}{(upliftPct * 100).toFixed(0)}%
-          </span>
-        </div>
-      </div>
-
-      {/* Price comparison */}
-      <div className="grid grid-cols-2 gap-4 mb-4">
-        <div>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">{assumedLabel}</p>
-          <p className="text-sm text-zinc-400 tabular-nums">
-            {fmtPriceForCommodity(reval.price_dfs, reval.commodity)} {reval.price_unit}
-          </p>
-        </div>
-        <div>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Spot price</p>
-          <p className="text-sm text-zinc-200 font-medium tabular-nums">
-            {fmtPriceForCommodity(reval.price_spot, reval.commodity)} {reval.price_unit}
-            <span className={`ml-1.5 text-xs ${priceChangePct >= 0 ? "text-emerald-500" : "text-red-400"}`}>
-              {priceChangePct >= 0 ? "+" : ""}{priceChangePct.toFixed(0)}%
+            <span className="q-label border border-white/[0.08] rounded px-1.5 py-0.5">
+              small base
             </span>
+          )}
+        </div>
+        <div className="text-right">
+          <span className={`font-mono text-[26px] leading-none tabular-nums ${upliftColor}`}>
+            {upliftPct >= 0 ? "+" : ""}
+            {(upliftPct * 100).toFixed(0)}%
+          </span>
+          <p className={`mt-0.5 font-mono text-[12px] tabular-nums ${upliftColor}`}>
+            {reval.npv_uplift >= 0 ? "+" : ""}
+            {ccy}
+            {reval.npv_uplift.toLocaleString(undefined, { maximumFractionDigits: 0 })}M
           </p>
         </div>
       </div>
 
-      {/* NPV comparison */}
-      <div className="grid grid-cols-3 gap-3 py-3 border-t border-white/[0.06]">
-        <div>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV (DFS)</p>
-          <p className="text-sm text-zinc-400 tabular-nums">{ccy}{reval.npv_dfs.toLocaleString(undefined, { maximumFractionDigits: 0 })}M</p>
-        </div>
-        <div>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">NPV (at spot)</p>
-          <p className="text-sm text-zinc-200 font-medium tabular-nums">{ccy}{reval.npv_spot.toLocaleString(undefined, { maximumFractionDigits: 0 })}M</p>
-        </div>
-        <div>
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Uplift</p>
-          <p className={`text-sm font-medium tabular-nums ${upliftColor}`}>
-            {reval.npv_uplift >= 0 ? "+" : ""}{ccy}{reval.npv_uplift.toLocaleString(undefined, { maximumFractionDigits: 0 })}M
-          </p>
-        </div>
+      {/* NPV bars — study vs spot at one glance */}
+      <div className="space-y-2">
+        <NPVBar
+          label={`NPV · ${assumedLabel.split(" ")[0]}`}
+          value={reval.npv_dfs}
+          max={maxNPV}
+          ccy={ccy}
+          barClass="bg-zinc-600/70"
+        />
+        <NPVBar
+          label="NPV · spot"
+          value={reval.npv_spot}
+          max={maxNPV}
+          ccy={ccy}
+          emphasis
+          barClass={
+            upliftPct >= 0
+              ? "bg-gradient-to-r from-emerald-500/50 to-emerald-400/90"
+              : "bg-gradient-to-r from-red-500/50 to-red-400/90"
+          }
+        />
+      </div>
+
+      {/* Price move, one line */}
+      <div className="mt-5 flex items-baseline justify-between border-t border-white/[0.05] pt-3.5">
+        <span className="q-label">{reval.commodity} price · {assumedLabel} → spot</span>
+        <span className="font-mono text-[13px] tabular-nums">
+          <span className="text-zinc-500">
+            {fmtPriceForCommodity(reval.price_dfs, reval.commodity)}
+          </span>
+          <span className="mx-2 text-zinc-600">→</span>
+          <span className={priceChangePct >= 0 ? "text-emerald-400" : "text-red-400"}>
+            {fmtPriceForCommodity(reval.price_spot, reval.commodity)} {reval.price_unit}
+          </span>
+          <span
+            className={`ml-2 text-[12px] ${
+              priceChangePct >= 0 ? "text-emerald-400" : "text-red-400"
+            }`}
+          >
+            {priceChangePct >= 0 ? "+" : ""}
+            {priceChangePct.toFixed(0)}%
+          </span>
+        </span>
       </div>
 
       {/* Assumptions row */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3">
-        <span className="text-[10px] text-zinc-600 tabular-nums">
-          {reval.annual_production.toLocaleString()} {reval.annual_production_unit}/yr
-        </span>
-        <span className="text-[10px] text-zinc-600 tabular-nums">
-          {reval.mine_life_years.toFixed(0)}yr mine life
-        </span>
-        <span className="text-[10px] text-zinc-600 tabular-nums">
-          {reval.discount_rate_pct.toFixed(0)}% discount
-        </span>
-        <span className="text-[10px] text-zinc-600 tabular-nums">
-          {reval.tax_rate_pct.toFixed(0)}% tax{reval.warnings.some(w => w.includes("defaulted")) ? " (default)" : ""}
-        </span>
-        {reval.fx_rate != null && (
-          <span className="text-[10px] text-zinc-600 tabular-nums">
-            FX {reval.fx_rate.toFixed(4)}
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {[
+          `${reval.annual_production.toLocaleString()} ${reval.annual_production_unit}/yr`,
+          `${reval.mine_life_years.toFixed(0)}y life`,
+          `${reval.discount_rate_pct.toFixed(0)}% discount`,
+          `${reval.tax_rate_pct.toFixed(0)}% tax${reval.warnings.some((w) => w.includes("defaulted")) ? " (default)" : ""}`,
+          ...(reval.fx_rate != null ? [`FX ${reval.fx_rate.toFixed(4)}`] : []),
+        ].map((t) => (
+          <span
+            key={t}
+            className="rounded border border-white/[0.05] bg-white/[0.02] px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 tabular-nums"
+          >
+            {t}
           </span>
-        )}
+        ))}
       </div>
 
       {/* Provenance */}
-      <p className="text-[10px] text-zinc-700 mt-2">
+      <p className="mt-2.5 text-[10px] text-zinc-700">
         {fmtSpotSource(reval.spot_source)} &middot; {spotDate} &middot; {fmtMethodVersion(reval.method_version)}
       </p>
     </div>
@@ -343,11 +402,15 @@ export function OperationsTab({ projects }: { projects: ProjectData[] }) {
   }
 
   return (
-    <div className="space-y-8">
-      {studyProjects.map((project) => (
-        <div key={project.name} className="border border-white/[0.06] rounded-lg p-4">
+    <div className="space-y-6">
+      {studyProjects.map((project, i) => (
+        <div
+          key={project.name}
+          className="q-card q-card-hero animate-fade-up p-5"
+          style={{ animationDelay: `${i * 60}ms` }}
+        >
           <div className="flex items-center gap-3 mb-1">
-            <h3 className="text-sm font-medium text-zinc-200">{project.name}</h3>
+            <h3 className="q-display text-[20px] text-zinc-100">{project.name}</h3>
             {stageBadge(project.stage)}
           </div>
 

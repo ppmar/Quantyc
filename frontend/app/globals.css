@@ -2,9 +2,11 @@
 @import "tw-animate-css";
 
 @theme inline {
+  /* ── Palette (unchanged) ─────────────────────────────────────────── */
   --color-background: oklch(0.09 0.005 260);
   --color-foreground: oklch(0.95 0 0);
   --color-surface: oklch(0.12 0.005 260);
+  --color-raised: oklch(0.14 0.006 260);
   --color-border: oklch(1 0 0 / 6%);
   --color-border-strong: oklch(1 0 0 / 10%);
   --color-amber: oklch(0.795 0.155 85);
@@ -14,9 +16,12 @@
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-instrument-serif);
 
-  --radius-sm: 2px;
-  --radius-md: 3px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 }
 
 @layer base {
@@ -31,13 +36,29 @@
 
   body {
     @apply bg-background text-foreground min-h-screen;
+    /* Atmosphere: amber dawn at top, deep vignette below. */
+    background-image:
+      radial-gradient(1100px 480px at 18% -160px, oklch(0.795 0.155 85 / 6%), transparent 70%),
+      radial-gradient(900px 420px at 85% -200px, oklch(0.5 0.08 260 / 7%), transparent 70%),
+      radial-gradient(1600px 900px at 50% 130%, oklch(0.07 0.008 260), transparent 75%);
+    background-attachment: fixed;
+  }
+
+  /* Film grain — texture, kills banding on large dark surfaces. */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 80;
+    opacity: 0.04;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Scrollbar */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -53,9 +74,217 @@
     background: oklch(1 0 0 / 14%);
   }
 
-  /* Selection */
   ::selection {
     background: oklch(0.795 0.155 85 / 25%);
     color: oklch(0.98 0 0);
+  }
+
+  :focus-visible {
+    outline: 1px solid oklch(0.795 0.155 85 / 60%);
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  /* ── Surfaces ───────────────────────────────────────────────────── */
+
+  /* Glass card: the standard container of the app. */
+  .q-card {
+    border-radius: var(--radius-lg);
+    border: 1px solid oklch(1 0 0 / 7%);
+    background:
+      linear-gradient(180deg, oklch(1 0 0 / 2.5%), oklch(1 0 0 / 0.8%)),
+      oklch(0.115 0.005 260 / 80%);
+    box-shadow:
+      0 1px 0 oklch(1 0 0 / 4%) inset,
+      0 8px 24px oklch(0 0 0 / 25%);
+  }
+
+  /* Hairline gradient top edge — premium detail on hero cards. */
+  .q-card-hero {
+    position: relative;
+  }
+  .q-card-hero::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    border-radius: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      oklch(0.795 0.155 85 / 45%) 30%,
+      oklch(0.795 0.155 85 / 45%) 70%,
+      transparent
+    );
+  }
+
+  /* ── Controls ───────────────────────────────────────────────────── */
+
+  .q-control {
+    @apply h-8 rounded-md border px-2.5 text-[13px] text-zinc-300 transition-all;
+    border-color: oklch(1 0 0 / 8%);
+    background: oklch(1 0 0 / 2.5%);
+  }
+  .q-control:hover {
+    border-color: oklch(1 0 0 / 16%);
+    background: oklch(1 0 0 / 4%);
+  }
+  .q-control:focus,
+  .q-control:focus-within {
+    outline: none;
+    border-color: oklch(0.795 0.155 85 / 50%);
+    box-shadow: 0 0 0 3px oklch(0.795 0.155 85 / 8%);
+  }
+
+  .q-select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23707078' stroke-width='1.2'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 26px;
+  }
+  .q-select option {
+    background: oklch(0.14 0.005 260);
+    color: oklch(0.85 0 0);
+  }
+
+  .q-chip {
+    @apply inline-flex items-center gap-1.5 h-6 rounded-full border px-2.5 text-[12px];
+    border-color: oklch(0.795 0.155 85 / 25%);
+    background: oklch(0.795 0.155 85 / 8%);
+    color: oklch(0.85 0.06 85);
+  }
+  .q-chip button {
+    @apply text-[13px] leading-none opacity-60 hover:opacity-100 transition-opacity;
+  }
+
+  .q-toggle {
+    @apply h-8 rounded-md border px-2.5 text-[13px] text-zinc-400 transition-all cursor-pointer select-none inline-flex items-center gap-1.5;
+    border-color: oklch(1 0 0 / 8%);
+    background: transparent;
+  }
+  .q-toggle:hover {
+    border-color: oklch(1 0 0 / 16%);
+    color: oklch(0.8 0 0);
+  }
+  .q-toggle[data-on="true"] {
+    border-color: oklch(0.795 0.155 85 / 40%);
+    background: oklch(0.795 0.155 85 / 9%);
+    color: oklch(0.88 0.07 85);
+    box-shadow: 0 0 12px oklch(0.795 0.155 85 / 8%) inset;
+  }
+
+  /* ── Typography helpers ─────────────────────────────────────────── */
+
+  .q-display {
+    font-family: var(--font-display);
+    font-style: italic;
+    letter-spacing: 0.01em;
+  }
+
+  .q-label {
+    @apply text-[10px] uppercase tracking-[0.16em] text-zinc-600;
+  }
+
+  /* ── Sidebar ────────────────────────────────────────────────────── */
+
+  .q-navlink {
+    @apply relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] text-zinc-500 transition-all;
+  }
+  .q-navlink:hover {
+    color: oklch(0.8 0 0);
+    background: oklch(1 0 0 / 3%);
+  }
+  .q-navlink[data-active="true"] {
+    color: oklch(0.93 0.02 85);
+    background: linear-gradient(90deg, oklch(0.795 0.155 85 / 10%), oklch(0.795 0.155 85 / 3%));
+  }
+  .q-navlink[data-active="true"]::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 2px;
+    background: oklch(0.795 0.155 85);
+    box-shadow: 0 0 8px oklch(0.795 0.155 85 / 60%);
+  }
+
+  /* ── Motion ─────────────────────────────────────────────────────── */
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-fade-up {
+    animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @keyframes expand-in {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-expand-in {
+    animation: expand-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @keyframes shimmer {
+    from {
+      background-position: -400px 0;
+    }
+    to {
+      background-position: 400px 0;
+    }
+  }
+  .q-shimmer {
+    border-radius: var(--radius-md);
+    background: linear-gradient(
+      90deg,
+      oklch(1 0 0 / 3%) 25%,
+      oklch(1 0 0 / 7%) 50%,
+      oklch(1 0 0 / 3%) 75%
+    );
+    background-size: 800px 100%;
+    animation: shimmer 1.4s linear infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 oklch(0.72 0.19 145 / 45%);
+    }
+    50% {
+      box-shadow: 0 0 0 4px oklch(0.72 0.19 145 / 0%);
+    }
+  }
+  .q-live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: oklch(0.72 0.19 145);
+    animation: pulse-dot 2.4s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-up,
+    .animate-expand-in,
+    .q-shimmer,
+    .q-live-dot {
+      animation: none;
+    }
   }
 }

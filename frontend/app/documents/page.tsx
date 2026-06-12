@@ -33,42 +33,47 @@ export default function DocumentsPage() {
   const types = [...new Set(docs.map((d) => d.doc_type))].sort();
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-baseline justify-between">
-        <p className="text-xs uppercase tracking-wider text-zinc-500">
-          Documents
-        </p>
-        <p className="text-xs text-zinc-600">{docs.length} in pipeline</p>
+    <div className="space-y-5 animate-fade-up">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="q-display text-[28px] leading-none text-zinc-100">
+            Documents
+          </h1>
+          <p className="mt-1.5 text-[13px] text-zinc-500">
+            Ingestion pipeline · {docs.length} documents
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="q-control q-select"
+            aria-label="Status filter"
+          >
+            <option value="">All statuses</option>
+            {statuses.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="q-control q-select"
+            aria-label="Type filter"
+          >
+            <option value="">All types</option>
+            {types.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      <div className="flex gap-2">
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-300 focus:outline-none focus:border-zinc-600"
-        >
-          <option value="">All statuses</option>
-          {statuses.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <select
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-          className="h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-300 focus:outline-none focus:border-zinc-600"
-        >
-          <option value="">All types</option>
-          {types.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="overflow-x-auto -mx-2">
+      <div className="q-card overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left border-b border-border">

@@ -13,7 +13,7 @@ export function HeroGrid({
   const hasBoth = !!cash && !!capital;
 
   return (
-    <div className={`grid gap-12 ${hasBoth ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
+    <div className={`grid gap-4 ${hasBoth ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"}`}>
       {cash && (
         <HeroStat
           label="Cash Position"

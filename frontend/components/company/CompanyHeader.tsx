@@ -18,10 +18,10 @@ export function CompanyHeader({
         <span className="text-[11px]">&larr;</span> Companies
       </Link>
       <div className="space-y-1">
-        <p className="text-[13px] font-mono font-medium tracking-wider text-amber">
+        <p className="text-[13px] font-mono font-medium tracking-[0.18em] text-amber">
           {ticker}
         </p>
-        <h1 className="text-3xl font-medium tracking-tight text-zinc-50">
+        <h1 className="q-display text-[34px] leading-tight text-zinc-50">
           {name}
         </h1>
         {metaLine && (

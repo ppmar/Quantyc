@@ -83,25 +83,27 @@ export function ComparisonTab({
     : [];
 
   return (
-    <div className="space-y-4">
+    <div className="q-card q-card-hero space-y-4 p-5">
       <div className="flex items-center gap-3 flex-wrap">
         <select
           value={commodity}
           onChange={(e) => setCommodity(e.target.value)}
-          className="h-8 rounded-sm border border-border bg-transparent px-2 text-[13px] text-zinc-300 focus:outline-none focus:border-zinc-600"
+          className="q-control q-select"
         >
           {feedable.map((c) => (
             <option key={c} value={c}>{COMMODITY_LABEL[c] ?? c}</option>
           ))}
         </select>
 
-        <div className="flex gap-1 ml-auto">
+        <div className="ml-auto flex gap-0.5 rounded-md border border-white/[0.06] p-0.5">
           {RANGES.map((r) => (
             <button
               key={r}
               onClick={() => setRange(r)}
-              className={`h-8 px-2.5 rounded-sm text-[13px] transition-colors ${
-                range === r ? "text-zinc-100 bg-white/[0.06]" : "text-zinc-500 hover:text-zinc-300"
+              className={`h-7 rounded-[5px] px-2.5 text-[12px] transition-colors ${
+                range === r
+                  ? "bg-amber/15 text-amber"
+                  : "text-zinc-500 hover:text-zinc-300"
               }`}
             >
               {RANGE_LABEL[r]}

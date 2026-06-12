@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import "./globals.css";
-import { Nav } from "@/components/nav";
+import { Sidebar, MobileNav } from "@/components/sidebar";
+import { CommandPalette } from "@/components/command-palette";
 import { PipelineProgress } from "@/components/pipeline-progress";
 
 const geistSans = Geist({
@@ -12,6 +13,13 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const instrumentSerif = Instrument_Serif({
+  variable: "--font-instrument-serif",
+  subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
 });
 
 export const metadata: Metadata = {
@@ -27,15 +35,19 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full`}
+      className={`${geistSans.variable} ${geistMono.variable} ${instrumentSerif.variable} dark h-full`}
     >
-      <body className="min-h-full flex flex-col tabular-nums">
-        <Nav />
-        <main className="flex-1 mx-auto w-full max-w-6xl px-6 lg:px-8 py-8">
-          <div className="mb-4">
-            <PipelineProgress />
+      <body className="min-h-full tabular-nums">
+        <Sidebar />
+        <MobileNav />
+        <CommandPalette />
+        <main className="lg:pl-[210px]">
+          <div className="mx-auto w-full max-w-6xl px-5 py-8 lg:px-10">
+            <div className="mb-4">
+              <PipelineProgress />
+            </div>
+            {children}
           </div>
-          {children}
         </main>
       </body>
     </html>

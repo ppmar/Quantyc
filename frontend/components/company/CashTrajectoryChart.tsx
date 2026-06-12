@@ -84,10 +84,10 @@ function BurnStrip({ data }: { data: CashHistoryPoint[] }) {
                 style={{
                   height: barHeight,
                   backgroundColor: isHovered
-                    ? "rgba(250,250,250,1)"
+                    ? "rgba(232,180,74,1)"
                     : isLast
-                      ? "rgba(250,250,250,0.85)"
-                      : "rgba(161,161,170,0.55)",
+                      ? "rgba(232,180,74,0.85)"
+                      : "rgba(161,161,170,0.35)",
                 }}
               />
               {isHovered && (
@@ -124,12 +124,12 @@ export function CashTrajectoryChart({
   ];
 
   return (
-    <div>
+    <div className="q-card q-card-hero p-5">
       <div className="flex items-baseline justify-between mb-4">
-        <p className="text-xs uppercase tracking-wider text-zinc-500">
-          Cash Trajectory
+        <p className="q-label">Cash trajectory</p>
+        <p className="text-[11px] font-mono text-zinc-600">
+          {data.length} quarters
         </p>
-        <p className="text-xs text-zinc-600">{data.length} quarters</p>
       </div>
       <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
@@ -145,8 +145,9 @@ export function CashTrajectoryChart({
                 x2="0"
                 y2="1"
               >
-                <stop offset="0%" stopColor="#a1a1aa" stopOpacity={0.15} />
-                <stop offset="100%" stopColor="#a1a1aa" stopOpacity={0} />
+                <stop offset="0%" stopColor="#e8b44a" stopOpacity={0.22} />
+                <stop offset="55%" stopColor="#e8b44a" stopOpacity={0.05} />
+                <stop offset="100%" stopColor="#e8b44a" stopOpacity={0} />
               </linearGradient>
             </defs>
             <XAxis
@@ -166,23 +167,24 @@ export function CashTrajectoryChart({
             />
             <Tooltip
               content={<CustomTooltip />}
-              cursor={{ stroke: "rgba(255,255,255,0.06)" }}
+              cursor={{ stroke: "rgba(232,180,74,0.25)" }}
             />
             <Area
               type="monotone"
               dataKey="cash_balance"
-              stroke="#a1a1aa"
-              strokeWidth={1.5}
+              stroke="#e8b44a"
+              strokeWidth={1.6}
               fill="url(#cashGradient)"
             />
-            {/* Latest data point — filled white dot */}
+            {/* Latest data point — amber glow dot */}
             {latest && (
               <ReferenceDot
                 x={latest.quarter}
                 y={latest.cash_balance}
                 r={4}
-                fill="#fafafa"
-                stroke="none"
+                fill="#e8b44a"
+                stroke="rgba(232,180,74,0.35)"
+                strokeWidth={6}
               />
             )}
           </AreaChart>

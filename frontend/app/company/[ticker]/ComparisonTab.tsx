@@ -100,7 +100,7 @@ export function ComparisonTab({
             <button
               key={r}
               onClick={() => setRange(r)}
-              className={`h-7 rounded-[5px] px-2.5 text-[12px] transition-colors ${
+              className={`h-7 rounded-sm px-2.5 text-[12px] transition-colors ${
                 range === r
                   ? "bg-amber/15 text-amber"
                   : "text-zinc-500 hover:text-zinc-300"

@@ -23,8 +23,13 @@ const instrumentSerif = Instrument_Serif({
 });
 
 export const metadata: Metadata = {
-  title: "Quantyc",
-  description: "Mining intelligence terminal",
+  metadataBase: new URL("https://frontend-production-258d.up.railway.app"),
+  title: {
+    default: "Quantyc — mining intelligence",
+    template: "%s · Quantyc",
+  },
+  description:
+    "Financial intelligence terminal for ASX junior miners: filings parsed into capital structure, cash runway, and spot revaluations of feasibility studies.",
 };
 
 export default function RootLayout({

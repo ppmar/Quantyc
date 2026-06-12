@@ -251,9 +251,9 @@ function NPVBar({
   return (
     <div className="flex items-center gap-3">
       <span className="q-label w-24 shrink-0">{label}</span>
-      <div className="relative h-5 flex-1 overflow-hidden rounded-[3px] bg-white/[0.03]">
+      <div className="relative h-5 flex-1 overflow-hidden rounded-sm bg-white/[0.03]">
         <div
-          className={`absolute inset-y-0 left-0 rounded-[3px] transition-[width] duration-700 ease-out ${barClass}`}
+          className={`absolute inset-y-0 left-0 rounded-sm transition-[width] duration-700 ease-out ${barClass}`}
           style={{ width: `${widthPct}%` }}
         />
       </div>

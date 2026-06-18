@@ -120,12 +120,22 @@ def portfolio_companies():
         if r["commodity"] not in comms:
             comms.append(r["commodity"])
 
-    # Latest revaluation per company (best uplift across projects)
+    # Revaluation of each company's LATEST revaluable study — the most-recent
+    # definitive/indicative study, not whichever row was written last. A
+    # superseded PFS (small NPV base → huge uplift %) must not win over the
+    # current DFS. Matches the per-project rule in api/snapshot.py.
     reval_map: dict[str, dict] = {}
     reval_rows = _query_db("""
         SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift, r.npv_uplift_pct,
                r.price_spot, r.commodity, r.computed_at, s.reporting_currency,
-               ROW_NUMBER() OVER (PARTITION BY c.company_id ORDER BY r.computed_at DESC) AS rn
+               ROW_NUMBER() OVER (
+                   PARTITION BY c.company_id
+                   ORDER BY
+                       CASE WHEN s.study_confidence_tier IN ('definitive', 'indicative')
+                            THEN 0 ELSE 1 END,
+                       COALESCE(s.study_date, '') DESC,
+                       r.computed_at DESC
+               ) AS rn
         FROM revaluations r
         JOIN companies c ON c.company_id = r.company_id
         LEFT JOIN studies s ON s.study_id = r.study_id

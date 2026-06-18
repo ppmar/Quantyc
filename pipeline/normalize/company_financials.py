@@ -146,6 +146,12 @@ def normalize_from_5b(document_id: int) -> bool:
     opex_burn = stg["quarterly_opex_burn"]
     invest_burn = stg["quarterly_invest_burn"]
 
+    # Receipts from customers (5B 1.1) lives in the staging raw_json, not a
+    # dedicated staging column. It's the deterministic production signal.
+    import json
+    raw = json.loads(stg["raw_json"]) if stg["raw_json"] else {}
+    receipts = raw.get("receipts_from_customers")
+
     needs_review, review_reason = _check_review_flags(
         conn, company_id, cash=cash, opex_burn=opex_burn
     )
@@ -156,11 +162,13 @@ def normalize_from_5b(document_id: int) -> bool:
         """INSERT INTO company_financials
            (company_id, document_id, effective_date, announcement_date,
             cash, debt, quarterly_opex_burn, quarterly_invest_burn,
+            receipts_from_customers,
             needs_review, review_reason, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             company_id, document_id, effective_date, announcement_date,
             cash, debt, opex_burn, invest_burn,
+            receipts,
             1 if needs_review else 0, review_reason, now,
         ),
     )

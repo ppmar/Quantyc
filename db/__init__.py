@@ -61,6 +61,8 @@ def _safe_add_columns(conn):
         # 0012: robustness audit — production source unit + header-derived tier.
         ("studies", "annual_production_unit", "TEXT"),
         ("studies", "header_tier", "TEXT"),
+        # 0014: Appendix 5B line 1.1 receipts from customers (production signal).
+        ("company_financials", "receipts_from_customers", "REAL"),
     ]
     for table, col, col_type in additions:
         try:

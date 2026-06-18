@@ -255,6 +255,7 @@ _SECTION_HEADINGS = {
 
 # Row reference patterns for extracting specific line items from tables
 _ROW_PATTERNS = {
+    "1.1":    re.compile(r"^\s*1\.1\b"),
     "1.9":    re.compile(r"^\s*1\.9\b"),
     "2.1(d)": re.compile(r"^\s*2\.1\s*\(?\s*d\s*\)?\b"),
     "2.6":    re.compile(r"^\s*2\.6\b"),
@@ -341,6 +342,16 @@ def _extract_from_tables(pdf_bytes: bytes, start_page: int) -> dict:
         all_rows.extend(table)
 
     # Extract critical fields by item reference
+    # 1.1 — Receipts from customers (production signal: explorers ~0, producers material)
+    for table in all_tables:
+        row = _find_row_in_table(table, "1.1")
+        if row:
+            nums = _get_numeric_cells(row)
+            non_none = [v for v in nums if v is not None]
+            if non_none:
+                results["receipts"] = non_none[-2] if len(non_none) >= 2 else non_none[-1]
+            break
+
     # 1.9 — Net cash from operating activities
     row = _find_row_in_table(all_rows, "1.9")
     if not row:
@@ -462,6 +473,7 @@ def _build_item_pattern(item: str) -> re.Pattern:
 
 
 _REGEX_PATTERNS = {
+    "receipts":            _build_item_pattern("1.1"),
     "operating":           _build_item_pattern("1.9"),
     "exploration_eval":    _build_item_pattern("2.1"),
     "investing":           _build_item_pattern("2.6"),
@@ -507,6 +519,11 @@ def _extract_from_text(full_text: str) -> dict:
 
     if not full_text.strip():
         return results
+
+    # Receipts from customers (1.1) — production signal
+    m = _REGEX_PATTERNS["receipts"].search(full_text)
+    if m:
+        results["receipts"] = _parse_amount(m.group(1))
 
     # Operating (1.9)
     m = _REGEX_PATTERNS["operating"].search(full_text)
@@ -649,6 +666,7 @@ def finalize_5b_amounts(results: dict) -> dict:
 
     return {
         "effective_date": results.get("effective_date"),
+        "receipts_from_customers": _k("receipts"),
         "cash": _k("cash"),
         "cash_beginning": _k("cash_beginning"),
         "debt": _k("debt"),
@@ -736,6 +754,7 @@ def extract_appendix_5b(document_id: int, pdf_bytes: bytes) -> dict | None:
     )
     return {
         "cash": cash,
+        "receipts_from_customers": raw["receipts_from_customers"],
         "debt": debt,
         "quarterly_opex_burn": opex,
         "quarterly_invest_burn": invest,

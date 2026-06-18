@@ -297,6 +297,34 @@ class TestRunBackfill:
         assert pids[2] not in [p["project_id"] for p in default]
         assert pids[2] in [p["project_id"] for p in allp]
 
+    def test_fetch_includes_study_floor(self, db):
+        """A study_floor project must be re-eligible so a later Gemini pass can
+        lift it past feasibility (e.g. to production). Floored != final."""
+        conn, db_path, pids = db
+        conn.execute(
+            "UPDATE projects SET stage='feasibility', stage_source='study_floor' WHERE project_id=?",
+            (pids[0],),
+        )
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            default = backfill._fetch_projects(None, False, None)
+        assert pids[0] in [p["project_id"] for p in default]
+
+    def test_skip_cached_study_floor_no_new_evidence(self, db):
+        """A study_floor project already attempted (stage_inferred_at set) with no
+        new evidence is cached — no repeat Gemini call each run."""
+        conn, db_path, pids = db
+        conn.execute(
+            "UPDATE projects SET stage='feasibility', stage_source='study_floor', "
+            "stage_inferred_at='2099-01-01T00:00:00' WHERE project_id=?",
+            (pids[0],),
+        )
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            project = dict(conn.execute(
+                "SELECT p.*, c.ticker FROM projects p JOIN companies c ON c.company_id=p.company_id "
+                "WHERE p.project_id=?", (pids[0],),
+            ).fetchone())
+            assert backfill._should_skip_cached(project) is True
+
 
 class TestStudyFloor:
     """PR1: a definitive/indicative study floors the project to >= feasibility,

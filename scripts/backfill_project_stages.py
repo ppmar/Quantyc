@@ -41,7 +41,15 @@ from parsers.project_stage_classifier import (
     AnnEvidence,
     classify_project,
 )
-from pipeline.stage_floor import study_floor_stage, most_advanced, apply_floor
+from pipeline.stage_floor import (
+    study_floor_stage,
+    most_advanced,
+    apply_floor,
+    production_floor,
+    STAGE_ORDER,
+)
+
+_PROD_RANK = {s: i for i, s in enumerate(STAGE_ORDER)}
 
 
 def _best_study_tier(conn, project_id: int) -> str | None:
@@ -89,7 +97,7 @@ def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -
             FROM projects p
             JOIN companies c ON c.company_id = p.company_id
             WHERE (p.stage IS NULL
-               OR p.stage_source = 'ozmin'
+               OR p.stage_source IN ('ozmin', 'study_floor')
                OR p.stage_source IS NULL)
               AND COALESCE(p.stage_source, '') != 'insufficient_evidence'
         """
@@ -110,8 +118,11 @@ def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -
 
 
 def _should_skip_cached(project: dict) -> bool:
-    """Skip if already gemini_inferred and no new evidence since last inference."""
-    if project["stage_source"] != "gemini_inferred":
+    """Skip if already classified (gemini_inferred or study_floor) and no new
+    evidence since the last attempt — avoids re-spending Gemini on the same
+    floored projects every run. A study_floor project with no recorded attempt
+    (stage_inferred_at NULL, e.g. floored at study-ingest) is NOT skipped."""
+    if project["stage_source"] not in ("gemini_inferred", "study_floor"):
         return False
     if not project["stage_inferred_at"]:
         return False
@@ -298,6 +309,83 @@ def _persist_insufficient(project: dict):
     conn.close()
 
 
+def apply_production_floors(conn, tickers: list[str] | None = None) -> dict:
+    """Deterministic production sweep (no LLM). Sets stage='production'
+    (stage_source='production_floor') for any project with a production signal:
+      - Appendix 5B receipts from customers (company-level) >= threshold, OR
+      - a passed first-production date (project-level, from the DFS).
+    Company-level receipts are attributed to the company's most-advanced built
+    project only. Idempotent; never downgrades a non-production stage by accident.
+    """
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    now = datetime.utcnow().isoformat()
+
+    sql = ("SELECT p.project_id, p.company_id, p.stage, p.production_start_date "
+           "FROM projects p JOIN companies c ON c.company_id = p.company_id")
+    params: list = []
+    if tickers:
+        placeholders = ",".join("?" * len(tickers))
+        sql += f" WHERE c.ticker IN ({placeholders})"
+        params = [t.upper() for t in tickers]
+    projects = conn.execute(sql, params).fetchall()
+
+    def _has_revaluable_study(pid: int) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM studies WHERE project_id = ? "
+            "AND study_confidence_tier IN ('definitive', 'indicative') LIMIT 1",
+            (pid,),
+        ).fetchone() is not None
+
+    receipts_cache: dict = {}
+    def _latest_receipts(cid: int):
+        if cid not in receipts_cache:
+            row = conn.execute(
+                "SELECT receipts_from_customers FROM company_financials "
+                "WHERE company_id = ? AND receipts_from_customers IS NOT NULL "
+                "ORDER BY effective_date DESC LIMIT 1",
+                (cid,),
+            ).fetchone()
+            receipts_cache[cid] = row["receipts_from_customers"] if row else None
+        return receipts_cache[cid]
+
+    to_promote: set = set()
+
+    # 1) First-production date — project-level, precise.
+    for p in projects:
+        if _has_revaluable_study(p["project_id"]) and production_floor(
+            None, p["production_start_date"], today, True
+        ):
+            to_promote.add(p["project_id"])
+
+    # 2) Customer receipts — company-level; attribute to the most-advanced built project.
+    by_company: dict = {}
+    for p in projects:
+        by_company.setdefault(p["company_id"], []).append(p)
+    for cid, plist in by_company.items():
+        rec = _latest_receipts(cid)
+        if rec is None:
+            continue
+        built = [p for p in plist if _has_revaluable_study(p["project_id"])]
+        if not built:
+            continue
+        best = min(built, key=lambda p: (_PROD_RANK.get(p["stage"], 99), p["project_id"]))
+        if production_floor(rec, None, today, True):
+            to_promote.add(best["project_id"])
+
+    promoted = 0
+    for p in projects:
+        if p["project_id"] in to_promote and p["stage"] != "production":
+            conn.execute(
+                "UPDATE projects SET stage = 'production', stage_source = 'production_floor', "
+                "stage_inferred_at = ? WHERE project_id = ?",
+                (now, p["project_id"]),
+            )
+            promoted += 1
+    conn.commit()
+    return {"promoted": promoted, "scanned": len(projects)}
+
+
 def _classify_one(project: dict, dry_run: bool) -> dict:
     """Classify a single project. Returns stats dict."""
     ticker = project["ticker"]
@@ -337,6 +425,22 @@ def _classify_one(project: dict, dry_run: bool) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def _production_sweep_into(stats: dict, ticker) -> None:
+    """Run the deterministic production floor and fold its result into stats.
+    Non-fatal — a sweep failure must not break a backfill."""
+    try:
+        conn = get_connection()
+        try:
+            ps = apply_production_floors(conn, [ticker] if ticker else None)
+        finally:
+            conn.close()
+        stats["production_promoted"] = ps["promoted"]
+        if ps["promoted"]:
+            logger.info("Production floor promoted %d project(s) to production", ps["promoted"])
+    except Exception:
+        logger.error("Production floor sweep failed", exc_info=True)
+
+
 def run_backfill(ticker=None, classify_all=False, limit=None,
                  workers=4, dry_run=False) -> dict:
     """Fetch unclassified projects, classify each via Gemini, persist results.
@@ -360,6 +464,8 @@ def run_backfill(ticker=None, classify_all=False, limit=None,
              "cached": 0, "stage_counts": {}, "confidence_counts": {}}
     if not projects:
         logger.info("Nothing to classify")
+        if not dry_run:
+            _production_sweep_into(stats, ticker)
         return stats
 
     stage_counts = stats["stage_counts"]
@@ -388,6 +494,8 @@ def run_backfill(ticker=None, classify_all=False, limit=None,
                     logger.error("Worker error for %s: %s", futures[f]["project_name"], e)
                     stats["error"] += 1
 
+    if not dry_run:
+        _production_sweep_into(stats, ticker)
     return stats
 
 

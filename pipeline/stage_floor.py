@@ -24,6 +24,36 @@ def most_advanced(*stages: Optional[str]) -> Optional[str]:
     return min(known, key=lambda s: _RANK[s]) if known else None
 
 
+# Below this quarterly customer-receipt figure (A$), an inflow is treated as
+# incidental (interest, small tolling) rather than mine production revenue.
+PRODUCTION_RECEIPTS_FLOOR = 1_000_000.0
+
+
+def production_floor(
+    receipts_from_customers: Optional[float],
+    production_start_date: Optional[str],
+    today: str,
+    has_revaluable_study: bool,
+    receipts_threshold: float = PRODUCTION_RECEIPTS_FLOOR,
+) -> bool:
+    """Deterministic 'is this producing?' test (no LLM).
+
+    Requires a built project (a definitive/indicative study exists) AND either:
+      - material customer receipts (Appendix 5B line 1.1 >= threshold), or
+      - a stated first-production date that has already passed (from the DFS).
+
+    The study gate stops a stray receipt from promoting a pure explorer to
+    production — you cannot produce without a built mine.
+    """
+    if not has_revaluable_study:
+        return False
+    if receipts_from_customers is not None and receipts_from_customers >= receipts_threshold:
+        return True
+    if production_start_date and production_start_date <= today:
+        return True
+    return False
+
+
 def apply_floor(llm_stage: Optional[str], confidence_tier: Optional[str]) -> tuple[Optional[str], bool]:
     """
     Returns (resolved_stage, floor_won).

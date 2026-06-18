@@ -138,6 +138,19 @@ downstream system normalizes to absolute units using this — so the unit must b
 - If you cannot determine the unit, leave both production and unit null and add a warning —
   never guess the magnitude.
 
+## Targeted first production date
+
+If the study states when FIRST PRODUCTION (first gold / first concentrate / commissioning
+complete / commercial production) is targeted, populate `targeted_first_production` as
+YYYY-MM-DD. Convert a quarter/half/year to the FIRST day of that period:
+- "Q4 CY2025" / "December 2025 quarter" -> 2025-10-01
+- "H1 2026" / "first half 2026" -> 2026-01-01
+- "2026" -> 2026-01-01
+
+This is the planned start even if phrased as a target. Null if the study gives no
+first-production timing. (Used downstream to mark the project as producing once the date
+has passed.)
+
 ## General rules
 
 1. Use null for any field where the value is not stated explicitly in the document. Never invent or estimate.

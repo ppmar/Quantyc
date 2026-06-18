@@ -474,6 +474,15 @@ def _persist_study(doc_id, ticker, result, model_name):
                     (resolved, project_id),
                 )
 
+        # Targeted first-production date (fallback production signal when 5B
+        # receipts aren't available). The deterministic production floor uses
+        # 'date passed' to lift the project to production.
+        if getattr(result, "targeted_first_production", None):
+            conn.execute(
+                "UPDATE projects SET production_start_date = ? WHERE project_id = ?",
+                (result.targeted_first_production, project_id),
+            )
+
         conn.commit()
         study_id = cur.lastrowid
         logger.info("Persisted %s study #%d for %s — %s", result.study_type, study_id, ticker, result.project_name)

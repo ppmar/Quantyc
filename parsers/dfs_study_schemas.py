@@ -58,6 +58,15 @@ class StudyExtraction(BaseModel):
     annual_production: Optional[Decimal] = None
     annual_production_unit: Optional[str] = None
     recovery_pct: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
+    targeted_first_production: Optional[str] = Field(
+        None,
+        description=(
+            "Targeted FIRST PRODUCTION / first gold date as YYYY-MM-DD. If the study "
+            "states only a quarter/half/year (e.g. 'Q4 CY2025', 'H1 2026', '2026'), use "
+            "the FIRST day of that period (Q4 2025 -> 2025-10-01; H1 2026 -> 2026-01-01). "
+            "Null if the study states no first-production timing."
+        ),
+    )
 
     # ─── Assumptions ─────────────────────────────────────────────────
     # ─── Tax ─────────────────────────────────────────────────────
@@ -109,6 +118,27 @@ class StudyExtraction(BaseModel):
                 f"effective_date_in_future_discarded:{self.effective_date.isoformat()}"
             )
             self.effective_date = None
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_first_production(self):
+        """Coerce targeted_first_production to YYYY-MM-DD; null if unparseable
+        (so the production floor's date comparison stays well-formed)."""
+        v = self.targeted_first_production
+        if not v:
+            return self
+        import re as _re
+        s = v.strip()
+        if _re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            pass
+        elif _re.fullmatch(r"\d{4}-\d{2}", s):
+            s = s + "-01"
+        elif _re.fullmatch(r"\d{4}", s):
+            s = s + "-01-01"
+        else:
+            self.extraction_warnings.append(f"first_production_unparseable:{v}")
+            s = None
+        self.targeted_first_production = s
         return self
 
     def has_minimum_data(self) -> bool:

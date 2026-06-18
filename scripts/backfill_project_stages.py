@@ -358,7 +358,9 @@ def apply_production_floors(conn, tickers: list[str] | None = None) -> dict:
         ):
             to_promote.add(p["project_id"])
 
-    # 2) Customer receipts — company-level; attribute to the most-advanced built project.
+    # 2) Customer receipts — company-level. Material receipts self-prove a
+    # producing mine (no study required), so attribute to the company's
+    # most-advanced project regardless of whether a DFS is on file.
     by_company: dict = {}
     for p in projects:
         by_company.setdefault(p["company_id"], []).append(p)
@@ -366,11 +368,8 @@ def apply_production_floors(conn, tickers: list[str] | None = None) -> dict:
         rec = _latest_receipts(cid)
         if rec is None:
             continue
-        built = [p for p in plist if _has_revaluable_study(p["project_id"])]
-        if not built:
-            continue
-        best = min(built, key=lambda p: (_PROD_RANK.get(p["stage"], 99), p["project_id"]))
-        if production_floor(rec, None, today, True):
+        best = min(plist, key=lambda p: (_PROD_RANK.get(p["stage"], 99), p["project_id"]))
+        if production_floor(rec, None, today, _has_revaluable_study(best["project_id"])):
             to_promote.add(best["project_id"])
 
     promoted = 0

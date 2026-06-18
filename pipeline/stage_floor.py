@@ -27,6 +27,10 @@ def most_advanced(*stages: Optional[str]) -> Optional[str]:
 # Below this quarterly customer-receipt figure (A$), an inflow is treated as
 # incidental (interest, small tolling) rather than mine production revenue.
 PRODUCTION_RECEIPTS_FLOOR = 1_000_000.0
+# Above this (A$5B/quarter) the figure is implausible for an ASX junior and is
+# treated as an extraction misparse, not production (sanity bound — e.g. VIT's
+# A$26B 1.1 misread). The largest real producer on coverage books ~A$0.7B/qtr.
+PRODUCTION_RECEIPTS_MAX = 5_000_000_000.0
 
 
 def production_floor(
@@ -35,21 +39,22 @@ def production_floor(
     today: str,
     has_revaluable_study: bool,
     receipts_threshold: float = PRODUCTION_RECEIPTS_FLOOR,
+    receipts_sanity_max: float = PRODUCTION_RECEIPTS_MAX,
 ) -> bool:
-    """Deterministic 'is this producing?' test (no LLM).
+    """Deterministic 'is this producing?' test (no LLM). True if either:
 
-    Requires a built project (a definitive/indicative study exists) AND either:
-      - material customer receipts (Appendix 5B line 1.1 >= threshold), or
-      - a stated first-production date that has already passed (from the DFS).
-
-    The study gate stops a stray receipt from promoting a pure explorer to
-    production — you cannot produce without a built mine.
+      - material customer receipts (Appendix 5B line 1.1) in
+        [threshold, sanity_max] — these SELF-PROVE a producing mine, so they do
+        NOT require a study on file (our study coverage is incomplete; e.g. GMD,
+        BGL, LYC produce with no DFS in the DB). The bounds reject stray small
+        inflows (interest) and implausible misparses.
+      - a stated first-production date that has passed, paired with a revaluable
+        study (the date comes from that DFS, so the study must exist).
     """
-    if not has_revaluable_study:
-        return False
-    if receipts_from_customers is not None and receipts_from_customers >= receipts_threshold:
+    if (receipts_from_customers is not None
+            and receipts_threshold <= receipts_from_customers <= receipts_sanity_max):
         return True
-    if production_start_date and production_start_date <= today:
+    if production_start_date and production_start_date <= today and has_revaluable_study:
         return True
     return False
 

@@ -55,11 +55,21 @@ def test_material_receipts_promotes_single_project(conn):
     assert r["stage_source"] == "production_floor"
 
 
-def test_explorer_with_receipts_not_promoted(conn):
-    cid = _co(conn, "XPL"); pid = _pj(conn, cid, "Greenfield", stage="exploration")  # no study
+def test_material_receipts_promotes_without_study(conn):
+    # A$40M customer receipts => producer, even with no DFS on file (incomplete
+    # study coverage, e.g. GMD/BGL/LYC). Receipts self-prove.
+    cid = _co(conn, "PROD"); pid = _pj(conn, cid, "Mine", stage="advanced_exploration")  # no study
     _fin(conn, cid, 40_000_000)
     apply_production_floors(conn)
-    assert _stage(conn, pid)["stage"] == "exploration"
+    assert _stage(conn, pid)["stage"] == "production"
+
+
+def test_implausible_receipts_not_promoted(conn):
+    # VIT-style misparse (A$26B) must not flip a company to production.
+    cid = _co(conn, "BAD"); pid = _pj(conn, cid, "Glitch"); _study(conn, pid)
+    _fin(conn, cid, 26_000_000_000)
+    apply_production_floors(conn)
+    assert _stage(conn, pid)["stage"] == "feasibility"
 
 
 def test_passed_production_date_promotes_that_project(conn):

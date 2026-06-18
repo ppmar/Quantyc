@@ -204,6 +204,19 @@ def _run_ingest(tickers, count):
         except Exception:
             logger.warning("OZMIN bootstrap failed (non-fatal):\n%s", traceback.format_exc())
 
+        # Classify/refresh project stages so a single Fetch does everything.
+        # Scoped to the fetched tickers (not the whole universe) to bound Gemini
+        # use; default mode re-examines study_floor projects, and the deterministic
+        # production sweep promotes producers — so one Fetch yields correct stages.
+        pipeline_status["phase"] = "backfilling_stages"
+        from scripts.backfill_project_stages import run_backfill
+        for _t in tickers:
+            try:
+                _ss = run_backfill(ticker=_t, classify_all=False)
+                logger.info("Stage backfill %s: %s", _t, _ss)
+            except Exception:
+                logger.warning("Stage backfill failed for %s (non-fatal):\n%s", _t, traceback.format_exc())
+
         failed = pipeline_status.get("failed_count", 0)
         pipeline_status["phase"] = "done_with_errors" if failed > 0 else "done"
         pipeline_status["running"] = False

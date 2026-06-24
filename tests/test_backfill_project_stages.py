@@ -77,7 +77,9 @@ def db(tmp_path):
             source TEXT,
             region TEXT,
             stage_source TEXT,
-            stage_inferred_at TEXT
+            stage_inferred_at TEXT,
+            last_classified_doc_id INTEGER,
+            last_classified_doc_date TEXT
         );
         CREATE TABLE project_commodities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,21 +287,24 @@ class TestRunBackfill:
             stats2 = backfill.run_backfill(workers=1)
         assert stats2["classified"] == 0
 
-    def test_fetch_excludes_insufficient_evidence(self, db):
+    def test_insufficient_with_current_watermark_not_reselected(self, db):
         conn, db_path, pids = db
+        # Marked insufficient AND already classified against the company's only doc (id 1).
         conn.execute(
-            "UPDATE projects SET stage_source='insufficient_evidence' WHERE project_id=?",
+            "UPDATE projects SET stage_source='insufficient_evidence', "
+            "last_classified_doc_id=1 WHERE project_id=?",
             (pids[2],),
         )
         with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
             default = backfill._fetch_projects(None, False, None)
             allp = backfill._fetch_projects(None, True, None)
-        assert pids[2] not in [p["project_id"] for p in default]
-        assert pids[2] in [p["project_id"] for p in allp]
+        assert pids[2] not in [p["project_id"] for p in default]   # no new evidence → skip
+        assert pids[2] in [p["project_id"] for p in allp]          # --all still takes it
 
     def test_fetch_includes_study_floor(self, db):
         """A study_floor project must be re-eligible so a later Gemini pass can
-        lift it past feasibility (e.g. to production). Floored != final."""
+        lift it past feasibility (e.g. to production). Floored != final. With a
+        NULL watermark and DEG's seeded doc (id 1), it is selected."""
         conn, db_path, pids = db
         conn.execute(
             "UPDATE projects SET stage='feasibility', stage_source='study_floor' WHERE project_id=?",
@@ -309,21 +314,78 @@ class TestRunBackfill:
             default = backfill._fetch_projects(None, False, None)
         assert pids[0] in [p["project_id"] for p in default]
 
-    def test_skip_cached_study_floor_no_new_evidence(self, db):
-        """A study_floor project already attempted (stage_inferred_at set) with no
-        new evidence is cached — no repeat Gemini call each run."""
+
+class TestWatermarkSelection:
+    """last_classified_doc_id: a project is re-selected iff a document with a higher
+    document_id than its watermark exists — regardless of stage_source. This unblocks
+    study_floor projects (the MEK gap)."""
+
+    def test_study_floor_project_reselected_when_newer_doc_exists(self, db):
         conn, db_path, pids = db
         conn.execute(
             "UPDATE projects SET stage='feasibility', stage_source='study_floor', "
-            "stage_inferred_at='2099-01-01T00:00:00' WHERE project_id=?",
+            "last_classified_doc_id=1 WHERE project_id=?",
+            (pids[0],),
+        )
+        # Newer announcement → document_id = 2 > 1.
+        conn.execute(
+            "INSERT INTO documents (ticker, url, sha256, source, announcement_date, "
+            "ingested_at, header, parse_status) VALUES "
+            "('DEG','http://example.com/fid.pdf','sha-hemi-fid','asx_api','2025-03-01',"
+            "?, 'Hemi Final Investment Decision','parsed')",
+            (datetime.utcnow().isoformat(),),
+        )
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            selected = backfill._fetch_projects(None, False, None)
+        assert pids[0] in [p["project_id"] for p in selected]   # old logic excluded it
+
+    def test_study_floor_project_skipped_when_no_newer_doc(self, db):
+        conn, db_path, pids = db
+        conn.execute(
+            "UPDATE projects SET stage='feasibility', stage_source='study_floor', "
+            "last_classified_doc_id=1 WHERE project_id=?",
             (pids[0],),
         )
         with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            selected = backfill._fetch_projects(None, False, None)
+        assert pids[0] not in [p["project_id"] for p in selected]
+
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_classification_sets_watermark_and_promotes(self, mock_classify, db):
+        conn, db_path, pids = db
+        # Gemini says development; Hemi has a definitive study (floor = feasibility).
+        mock_classify.return_value = _mock_inference(stage="development")
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
             project = dict(conn.execute(
-                "SELECT p.*, c.ticker FROM projects p JOIN companies c ON c.company_id=p.company_id "
-                "WHERE p.project_id=?", (pids[0],),
+                "SELECT p.*, c.ticker FROM projects p JOIN companies c "
+                "ON c.company_id = p.company_id WHERE p.project_id = ?", (pids[0],),
             ).fetchone())
-            assert backfill._should_skip_cached(project) is True
+            backfill._classify_one(project, dry_run=False)
+        row = conn.execute(
+            "SELECT stage, stage_source, last_classified_doc_id, last_classified_doc_date "
+            "FROM projects WHERE project_id = ?", (pids[0],)
+        ).fetchone()
+        assert row["stage"] == "development"          # floor (feasibility) did not win
+        assert row["stage_source"] == "gemini_inferred"
+        assert row["last_classified_doc_id"] == 1      # DEG's only doc
+        assert row["last_classified_doc_date"] == "2024-08-15"
+
+    @patch("scripts.backfill_project_stages.classify_project")
+    def test_insufficient_records_watermark(self, mock_classify, db):
+        conn, db_path, pids = db  # Wingina pids[2]: no study, no resource
+        mock_classify.side_effect = InsufficientEvidenceError("no signal")
+        with patch("scripts.backfill_project_stages.get_connection", return_value=conn):
+            project = dict(conn.execute(
+                "SELECT p.*, c.ticker FROM projects p JOIN companies c "
+                "ON c.company_id = p.company_id WHERE p.project_id = ?", (pids[2],),
+            ).fetchone())
+            backfill._classify_one(project, dry_run=False)
+        row = conn.execute(
+            "SELECT stage_source, last_classified_doc_id FROM projects WHERE project_id=?",
+            (pids[2],)
+        ).fetchone()
+        assert row["stage_source"] == "insufficient_evidence"
+        assert row["last_classified_doc_id"] == 1      # company watermark set → no loop
 
 
 class TestStudyFloor:

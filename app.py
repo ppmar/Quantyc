@@ -187,11 +187,12 @@ def _start_ingest(tickers, count):
 
 
 def _run_ingest(tickers, count):
-    global pipeline_status
+    global pipeline_status, _stage_backfill_running
     try:
         from ingest.asx_poller import poll_tickers
 
-        # Poll ASX → classify by headline → download only 5Bs → extract immediately
+        # Poll ASX → classify by headline → download targets → extract immediately
+        # (5B + issue-of-securities + JORC resource updates + DFS/PFS/Scoping studies).
         pipeline_status["phase"] = "polling"
         poll_tickers(tickers, count=count, status=pipeline_status)
 
@@ -204,18 +205,26 @@ def _run_ingest(tickers, count):
         except Exception:
             logger.warning("OZMIN bootstrap failed (non-fatal):\n%s", traceback.format_exc())
 
-        # Classify/refresh project stages so a single Fetch does everything.
-        # Scoped to the fetched tickers (not the whole universe) to bound Gemini
-        # use; default mode re-examines study_floor projects, and the deterministic
-        # production sweep promotes producers — so one Fetch yields correct stages.
-        pipeline_status["phase"] = "backfilling_stages"
-        from scripts.backfill_project_stages import run_backfill
-        for _t in tickers:
+        # Re-judge project stages on the just-ingested evidence. Idempotent via the
+        # last_classified_doc_id watermark: companies with no new documents cost zero
+        # Gemini calls, so a universe-wide default pass here is incremental. Shares the
+        # _stage_backfill_running guard with /api/backfill-stages so the two paths never
+        # run concurrently (SQLite writes). Non-fatal: a classifier failure must not
+        # blank out a successful ingest — the ingest study floor already left every
+        # studied project at >= feasibility.
+        pipeline_status["phase"] = "classifying_stages"
+        if not _stage_backfill_running:
+            _stage_backfill_running = True
             try:
-                _ss = run_backfill(ticker=_t, classify_all=False)
-                logger.info("Stage backfill %s: %s", _t, _ss)
+                from scripts.backfill_project_stages import run_backfill
+                stage_stats = run_backfill(classify_all=False)
+                logger.info("Stage classification: %s", stage_stats)
             except Exception:
-                logger.warning("Stage backfill failed for %s (non-fatal):\n%s", _t, traceback.format_exc())
+                logger.warning("Stage classification failed (non-fatal):\n%s", traceback.format_exc())
+            finally:
+                _stage_backfill_running = False
+        else:
+            logger.info("Stage classification skipped — backfill already running")
 
         failed = pipeline_status.get("failed_count", 0)
         pipeline_status["phase"] = "done_with_errors" if failed > 0 else "done"

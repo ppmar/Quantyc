@@ -66,6 +66,29 @@ def _best_study_tier(conn, project_id: int) -> str | None:
     return None
 
 
+def _company_doc_watermark(conn, company_id: int) -> tuple[int, str | None]:
+    """Highest document_id ingested for the company, and its announcement date.
+
+    Returns (0, None) when the company has no documents yet (I7): the sentinel 0
+    is below any real document_id, so the project is not re-selected until a real
+    document arrives.
+    """
+    row = conn.execute(
+        """
+        SELECT d.document_id AS doc_id, d.announcement_date AS ann
+        FROM documents d
+        JOIN companies c ON c.ticker = d.ticker
+        WHERE c.company_id = ?
+        ORDER BY d.document_id DESC
+        LIMIT 1
+        """,
+        (company_id,),
+    ).fetchone()
+    if row is None:
+        return 0, None
+    return row["doc_id"], row["ann"]
+
+
 def _apply_migrations():
     conn = get_connection()
     migrations_dir = Path(__file__).resolve().parent.parent / "db" / "migrations"
@@ -83,7 +106,7 @@ def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -
     if classify_all:
         sql = """
             SELECT p.project_id, p.project_name, p.company_id, p.country, p.state,
-                   p.stage, p.stage_source, p.stage_inferred_at,
+                   p.stage, p.stage_source, p.stage_inferred_at, p.last_classified_doc_id,
                    c.ticker
             FROM projects p
             JOIN companies c ON c.company_id = p.company_id
@@ -92,14 +115,15 @@ def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -
     else:
         sql = """
             SELECT p.project_id, p.project_name, p.company_id, p.country, p.state,
-                   p.stage, p.stage_source, p.stage_inferred_at,
+                   p.stage, p.stage_source, p.stage_inferred_at, p.last_classified_doc_id,
                    c.ticker
             FROM projects p
             JOIN companies c ON c.company_id = p.company_id
-            WHERE (p.stage IS NULL
-               OR p.stage_source IN ('ozmin', 'study_floor')
-               OR p.stage_source IS NULL)
-              AND COALESCE(p.stage_source, '') != 'insufficient_evidence'
+            WHERE EXISTS (
+                SELECT 1 FROM documents d
+                WHERE d.ticker = c.ticker
+                  AND d.document_id > COALESCE(p.last_classified_doc_id, 0)
+            )
         """
         params = []
 
@@ -115,45 +139,6 @@ def _fetch_projects(ticker: str | None, classify_all: bool, limit: int | None) -
     result = [dict(r) for r in rows]
     conn.close()
     return result
-
-
-def _should_skip_cached(project: dict) -> bool:
-    """Skip if already classified (gemini_inferred or study_floor) and no new
-    evidence since the last attempt — avoids re-spending Gemini on the same
-    floored projects every run. A study_floor project with no recorded attempt
-    (stage_inferred_at NULL, e.g. floored at study-ingest) is NOT skipped."""
-    if project["stage_source"] not in ("gemini_inferred", "study_floor"):
-        return False
-    if not project["stage_inferred_at"]:
-        return False
-
-    conn = get_connection()
-    inferred_at = project["stage_inferred_at"]
-    pid = project["project_id"]
-
-    # Check for new studies
-    new_study = conn.execute(
-        "SELECT 1 FROM studies WHERE project_id = ? AND created_at > ? LIMIT 1",
-        (pid, inferred_at),
-    ).fetchone()
-
-    # Check for new resources
-    new_resource = conn.execute(
-        "SELECT 1 FROM resources WHERE project_id = ? AND created_at > ? LIMIT 1",
-        (pid, inferred_at),
-    ).fetchone()
-
-    # Check for new documents (announcements)
-    new_doc = conn.execute("""
-        SELECT 1 FROM documents d
-        JOIN companies c ON c.ticker = d.ticker
-        JOIN projects p ON p.company_id = c.company_id AND p.project_id = ?
-        WHERE d.announcement_date > ?
-        LIMIT 1
-    """, (pid, inferred_at)).fetchone()
-
-    conn.close()
-    return not (new_study or new_resource or new_doc)
 
 
 def build_evidence(project: dict) -> ProjectEvidence:
@@ -249,14 +234,17 @@ def _persist_result(project: dict, inference: ProjectStageInference, evidence: P
     resolved_stage, floor_won = apply_floor(inference.stage, tier)
     source = "study_floor" if floor_won else "gemini_inferred"
 
+    wm_id, wm_date = _company_doc_watermark(conn, project["company_id"])
     conn.execute("""
         UPDATE projects
         SET stage = ?,
             region = COALESCE(?, region),
             stage_source = ?,
-            stage_inferred_at = ?
+            stage_inferred_at = ?,
+            last_classified_doc_id = ?,
+            last_classified_doc_date = ?
         WHERE project_id = ?
-    """, (resolved_stage, inference.region, source, now, pid))
+    """, (resolved_stage, inference.region, source, now, wm_id, wm_date, pid))
 
     # Audit row keeps the RAW LLM stage (provenance of what the LLM actually said).
     conn.execute("""
@@ -287,6 +275,7 @@ def _persist_insufficient(project: dict):
     now = datetime.utcnow().isoformat()
     pid = project["project_id"]
 
+    wm_id, wm_date = _company_doc_watermark(conn, project["company_id"])
     tier = _best_study_tier(conn, pid)
     floor = study_floor_stage(tier)
     if floor is not None:
@@ -295,16 +284,20 @@ def _persist_insufficient(project: dict):
             UPDATE projects
             SET stage = ?,
                 stage_source = 'study_floor',
-                stage_inferred_at = ?
+                stage_inferred_at = ?,
+                last_classified_doc_id = ?,
+                last_classified_doc_date = ?
             WHERE project_id = ?
-        """, (resolved, now, pid))
+        """, (resolved, now, wm_id, wm_date, pid))
     else:
         conn.execute("""
             UPDATE projects
             SET stage_source = 'insufficient_evidence',
-                stage_inferred_at = ?
+                stage_inferred_at = ?,
+                last_classified_doc_id = ?,
+                last_classified_doc_date = ?
             WHERE project_id = ?
-        """, (now, pid))
+        """, (now, wm_id, wm_date, pid))
     conn.commit()
     conn.close()
 
@@ -446,19 +439,16 @@ def run_backfill(ticker=None, classify_all=False, limit=None,
 
     Reusable by the CLI, the /api/backfill-stages endpoint, and the orchestrator.
     Returns a stats dict. Idempotent: default mode only touches projects whose
-    stage is unset (or ozmin-sourced), and skips gemini-cached ones with no new
-    evidence.
+    company has a document newer than the project's last_classified_doc_id
+    watermark, regardless of stage_source. A re-run with no new documents is a
+    no-op (zero Gemini calls, zero stage writes).
     """
     projects = _fetch_projects(ticker, classify_all, limit)
     logger.info("Found %d projects to process", len(projects))
 
-    if not classify_all:
-        before = len(projects)
-        projects = [p for p in projects if not _should_skip_cached(p)]
-        cached = before - len(projects)
-        if cached:
-            logger.info("Skipped %d cached (no new evidence)", cached)
-
+    # Selection gate (last_classified_doc_id watermark) is now in the SQL itself:
+    # a project is fetched only if its company has a document newer than the
+    # watermark. No post-fetch cache filter needed.
     stats = {"classified": 0, "insufficient": 0, "error": 0, "dry_run": 0,
              "cached": 0, "stage_counts": {}, "confidence_counts": {}}
     if not projects:

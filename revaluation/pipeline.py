@@ -13,11 +13,13 @@ from decimal import Decimal
 from typing import Optional
 
 from revaluation.math import (
-    RevaluationInput,
+    BasketRevaluationInput,
+    CommodityLeg,
     SUPPORTED_COMMODITIES,
-    revalue,
+    revalue_basket,
     apply_production_magnitude_heuristic,
     normalize_cu_price_to_per_lb,
+    normalize_production_to_unit_price_basis,
     normalize_tax_rate_pct,
     RevaluationError,
 )
@@ -45,6 +47,104 @@ def is_aud_price_unit(unit: Optional[str]) -> bool:
     if not unit:
         return False
     return bool(_AUD_UNIT_RE.search(unit.upper()))
+
+
+class _ResolvedLeg:
+    """One metal's resolved revaluation inputs (per-leg v3 logic applied). Carries both
+    the supported-leg math inputs and the coverage bookkeeping for revaluation_legs."""
+    __slots__ = ("commodity", "supported", "price_dfs_usd", "price_spot", "price_spot_id",
+                 "annual_production", "annual_production_unit", "dfs_metal_revenue_usd",
+                 "warnings")
+
+    def __init__(self, commodity, supported, price_dfs_usd, price_spot, price_spot_id,
+                 annual_production, annual_production_unit, dfs_metal_revenue_usd, warnings):
+        self.commodity = commodity
+        self.supported = supported
+        self.price_dfs_usd = price_dfs_usd
+        self.price_spot = price_spot
+        self.price_spot_id = price_spot_id
+        self.annual_production = annual_production
+        self.annual_production_unit = annual_production_unit
+        self.dfs_metal_revenue_usd = dfs_metal_revenue_usd
+        self.warnings = warnings
+
+
+def _resolve_leg(conn, study, leg_row, price_deck, get_fx) -> _ResolvedLeg:
+    """Per-leg carry-over of the v3 single-commodity logic (I9): magnitude heuristic,
+    Cu /t→/lb, AUD-deck→USD, spot fetch. A leg is *supported* (contributes ΔNPV) only
+    when its commodity is in SUPPORTED_COMMODITIES AND both a DFS price and a production
+    volume resolve. Otherwise it is recorded with supported=0 and 0 ΔNPV, but its DFS
+    metal revenue still counts toward the coverage denominator (I3, I4)."""
+    commodity = leg_row["commodity"]
+    warnings: list[str] = []
+    prod_raw = leg_row["annual_production"]
+    basis_unit = "oz" if commodity in ("Au", "Ag") else "t"
+
+    # DFS price from the deck (per commodity). Decks carry currency+unit verbatim.
+    price_dfs = None
+    price_dfs_unit = None
+    for entry in price_deck:
+        if entry.get("commodity") == commodity:
+            price_dfs = Decimal(str(entry["price"]))
+            price_dfs_unit = entry.get("unit")
+            break
+
+    # Cu deck /t→/lb (CYM Nifty) — supported metals only; the heuristic is Cu-specific.
+    if commodity == "Cu" and price_dfs is not None:
+        price_dfs, w = normalize_cu_price_to_per_lb(price_dfs, price_dfs_unit)
+        if w:
+            warnings.append(w)
+    # AUD deck → USD (BTR). The deck unit carries the currency; spot is always USD.
+    if price_dfs is not None and is_aud_price_unit(price_dfs_unit):
+        price_dfs = price_dfs * get_fx()
+        warnings.append(f"price_deck_aud_to_usd_{commodity}:{price_dfs_unit}")
+
+    # Magnitude heuristic (koz/Moz/kt mislabels) — supported metals only (keys on Au/Ag/Cu).
+    prod_scaled = None
+    if prod_raw is not None:
+        if commodity in SUPPORTED_COMMODITIES:
+            prod_scaled, w = apply_production_magnitude_heuristic(commodity, Decimal(str(prod_raw)))
+            if w:
+                warnings.append(w)
+        else:
+            prod_scaled = Decimal(str(prod_raw))
+
+    supported = (commodity in SUPPORTED_COMMODITIES
+                 and price_dfs is not None and prod_scaled is not None)
+
+    # Spot — only needed (and only meaningful) for supported metals.
+    price_spot = None
+    price_spot_id = None
+    if supported:
+        try:
+            price_spot, price_spot_id = get_or_fetch_price(conn, commodity)
+        except PriceFetchError as e:
+            raise RevaluationError(f"spot_fetch_failed:{commodity}:{e}")
+
+    # DFS metal revenue for the coverage denominator. Supported legs use the price-basis
+    # (oz/lb) so the weight is comparable to the modeled ΔNPV; unsupported legs use the
+    # raw stored production × deck price (best-effort proxy — no unit rules exist for
+    # Ni/Co/Zn, and these only affect the denominator).
+    dfs_rev = Decimal("0")
+    if prod_scaled is not None and price_dfs is not None:
+        if supported:
+            norm_prod, _w = normalize_production_to_unit_price_basis(
+                prod_scaled, basis_unit, ("oz" if commodity in ("Au", "Ag") else "lb"), commodity)
+            dfs_rev = norm_prod * price_dfs
+        else:
+            dfs_rev = prod_scaled * price_dfs
+
+    return _ResolvedLeg(
+        commodity=commodity,
+        supported=supported,
+        price_dfs_usd=price_dfs,
+        price_spot=price_spot,
+        price_spot_id=price_spot_id,
+        annual_production=prod_scaled,
+        annual_production_unit=basis_unit,
+        dfs_metal_revenue_usd=dfs_rev,
+        warnings=warnings,
+    )
 
 
 def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
@@ -84,24 +184,20 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     if tier not in ("definitive", "indicative"):
         raise RevaluationError(f"not_revaluable_tier:{tier}")
 
-    # Polymetallic guard: a project with >1 primary commodity cannot be valued by the
-    # single-commodity first-order model — the metal it would pick is arbitrary and the
-    # number misrepresents the basket (CHN Gonneville Ni-Cu-PGE-Au). Block it.
-    n_primary = conn.execute(
-        "SELECT COUNT(*) FROM project_commodities WHERE project_id = ? AND is_primary = 1",
-        (study["project_id"],),
+    # NOTE: the PR0 multi-commodity hard guard is gone — first_order_v4 values the basket
+    # leg-by-leg (below) and reports coverage. Distinct project commodities are still read,
+    # but only to WARN when study_commodities under-represents the basket (a legacy study
+    # backfilled with just its primary leg, not yet re-extracted into a full basket): such a
+    # row is valued on what it has, but the warning keeps the coverage signal honest (I4).
+    project_distinct = conn.execute(
+        "SELECT COUNT(DISTINCT commodity) FROM ("
+        "  SELECT commodity FROM project_commodities WHERE project_id = ?"
+        "  UNION SELECT commodity FROM resources WHERE project_id = ?)",
+        (study["project_id"], study["project_id"]),
     ).fetchone()[0]
-    if n_primary > 1:
-        raise RevaluationError("not_revaluable_polymetallic")
 
-    commodity = study["commodity"]
-    if commodity not in SUPPORTED_COMMODITIES:
-        logger.info("Skipping study %d: commodity %s not supported by POC", study_id, commodity)
-        return None
-
-    # Required fields for math
+    # Required study-level (shared) fields for the basket math.
     required = {
-        "annual_production": study["annual_production"],
         "mine_life_years": study["mine_life_years"],
         "discount_rate_pct": study["discount_rate_pct"],
         "post_tax_npv": study["post_tax_npv"],
@@ -111,67 +207,53 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     if missing:
         raise RevaluationError(f"missing_fields:{','.join(missing)}")
 
-    # Production unit: oz for Au/Ag, t for Cu (per LLM prompt instructions)
-    production_unit = "oz" if commodity in ("Au", "Ag") else "t"
-
-    # Magnitude heuristics (koz/Moz/kt mislabels) — pure function, and the
-    # warning is persisted with the row, not just logged.
-    production_warning = None
-    annual_prod = study["annual_production"]
-    if annual_prod is not None:
-        scaled, production_warning = apply_production_magnitude_heuristic(
-            commodity, Decimal(str(annual_prod))
-        )
-        if production_warning:
-            logger.warning("Study %d: %s", study_id, production_warning)
-        annual_prod = scaled
-
-    # Extract DFS price assumption for primary commodity
-    price_deck = json.loads(study["assumed_price_deck"] or "[]")
-    price_dfs = None
-    price_dfs_unit = None
-    cu_price_warning = None
-    for entry in price_deck:
-        if entry.get("commodity") == commodity:
-            price_dfs = Decimal(str(entry["price"]))
-            price_dfs_unit = entry.get("unit")
-            break
-    if price_dfs is None:
-        raise RevaluationError(f"no_dfs_price_for_commodity:{commodity}")
-
-    # Copper decks are often quoted in USD/tonne while spot (HG=F) is USD/lb;
-    # reconcile to USD/lb so the price delta isn't off by ~2204x (CYM Nifty bug).
-    if commodity == "Cu":
-        price_dfs, cu_price_warning = normalize_cu_price_to_per_lb(price_dfs, price_dfs_unit)
-
-    # Spot price
-    try:
-        price_spot, price_spot_id = get_or_fetch_price(conn, commodity)
-    except PriceFetchError as e:
-        raise RevaluationError(f"spot_fetch_failed:{e}")
-
-    # FX if needed
-    fx_rate = None
-    fx_price_id = None
-    if study["reporting_currency"] == "AUD":
-        fx_rate, fx_price_id = get_or_fetch_price(conn, "AUDUSD")
-    elif study["reporting_currency"] != "USD":
+    if study["reporting_currency"] not in ("AUD", "USD"):
         raise RevaluationError(f"reporting_currency_not_supported:{study['reporting_currency']}")
 
-    # Convert an AUD-denominated price deck to USD so it is comparable to USD spot.
-    # The deck unit (e.g. "AUD/oz", "A$/oz", "AUD/t") carries the currency; spot is
-    # always USD. Without this an AUD deck is compared raw against USD spot
-    # (BTR: A$5000/oz deck vs US$4365 spot -> bogus -54% uplift).
-    aud_price_warning = None
-    if is_aud_price_unit(price_dfs_unit):
-        if fx_rate is None:
-            fx_rate, fx_price_id = get_or_fetch_price(conn, "AUDUSD")
-        price_dfs = price_dfs * fx_rate  # fx_rate = USD per AUD
-        aud_price_warning = f"price_deck_aud_to_usd:{price_dfs_unit}@fx{fx_rate}"
+    # Per-metal basket — the canonical production input (study_commodities). The 0015
+    # backfill guarantees ≥1 leg per existing study; new studies get legs at ingest.
+    legs = conn.execute(
+        "SELECT commodity, annual_production, annual_production_unit, is_primary "
+        "FROM study_commodities WHERE study_id = ?", (study_id,)
+    ).fetchall()
+    if not legs:
+        raise RevaluationError("no_study_commodities")
+
+    price_deck = json.loads(study["assumed_price_deck"] or "[]")
+
+    # FX (USD per AUD) is shared: needed for AUD reporting (final NPV conversion) and for
+    # any AUD-denominated deck leg. Fetched at most once, memoized.
+    _fx_cache: dict = {}
+    fx_price_id = None
+    def get_fx():
+        nonlocal fx_price_id
+        if "rate" not in _fx_cache:
+            rate, pid = get_or_fetch_price(conn, "AUDUSD")
+            _fx_cache["rate"] = rate
+            fx_price_id = pid
+        return _fx_cache["rate"]
+
+    fx_rate = None
+    if study["reporting_currency"] == "AUD":
+        fx_rate = get_fx()
+
+    # Resolve every leg (per-leg v3 logic), split supported from not.
+    resolved = [_resolve_leg(conn, study, lr, price_deck, get_fx) for lr in legs]
+    dfs_rev_total = sum((r.dfs_metal_revenue_usd for r in resolved), Decimal("0"))
+    supported = [r for r in resolved if r.supported]
+    if not supported:
+        raise RevaluationError("not_revaluable_no_supported_commodity")
+
+    # An AUD-deck conversion inside a leg may have populated fx; reflect it for reporting.
+    if fx_rate is None and "rate" in _fx_cache:
+        fx_rate = _fx_cache["rate"]
+
+    # Coverage (I4): share of DFS metal revenue that the supported legs represent.
+    supported_rev = sum((r.dfs_metal_revenue_usd for r in supported), Decimal("0"))
+    coverage_pct = (supported_rev / dfs_rev_total * Decimal("100")) if dfs_rev_total > 0 else Decimal("100")
 
     # Years already in production at the valuation date. None when the project has
     # no production_start_date (developer / pre-production) -> annuity over full life.
-    # Set for producers -> annuity over remaining life only (see math.remaining_life_years).
     production_elapsed_years = None
     start_raw = study["production_start_date"]
     if start_raw:
@@ -190,12 +272,17 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         Decimal(str(tax_raw)) if tax_raw is not None else None
     )
 
-    inp = RevaluationInput(
-        commodity=commodity,
-        price_dfs_usd=price_dfs,
-        price_spot_usd=price_spot,
-        annual_production=Decimal(str(annual_prod)),
-        annual_production_unit=production_unit,
+    inp = BasketRevaluationInput(
+        legs=tuple(
+            CommodityLeg(
+                commodity=r.commodity,
+                price_dfs_usd=r.price_dfs_usd,
+                price_spot_usd=r.price_spot,
+                annual_production=r.annual_production,
+                annual_production_unit=r.annual_production_unit,
+            )
+            for r in supported
+        ),
         mine_life_years=Decimal(str(study["mine_life_years"])),
         discount_rate_pct=Decimal(str(study["discount_rate_pct"])),
         tax_rate_pct=tax_rate_pct,
@@ -205,21 +292,22 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         production_elapsed_years=production_elapsed_years,
     )
 
-    result = revalue(inp)
+    result = revalue_basket(inp)
 
-    # Stale-study guard. Remaining life is derived from THIS study's mine_life.
-    # For a producer whose study is years old, reserves have often been extended
-    # (new deposits, mine-life upgrades) since, so `mine_life - elapsed` understates
-    # the real remaining life and the depletion-adjusted uplift is too low. Flag it.
     warnings = list(result.warnings)
-    if production_warning:
-        warnings.append(production_warning)
+    for r in resolved:
+        warnings.extend(r.warnings)
     if tax_warning:
         warnings.append(tax_warning)
-    if cu_price_warning:
-        warnings.append(cu_price_warning)
-    if aud_price_warning:
-        warnings.append(aud_price_warning)
+    warnings.append(f"coverage_pct:{coverage_pct.quantize(Decimal('0.1'))}")
+    if coverage_pct < Decimal("100"):
+        warnings.append(f"partial_basket_coverage:{coverage_pct.quantize(Decimal('0.1'))}pct")
+    # Legacy safety net: the project spans more distinct commodities than study_commodities
+    # has legs → the basket is under-extracted (not yet re-run through commodity_production).
+    if project_distinct > len(resolved):
+        warnings.append(f"basket_legs_incomplete:{len(resolved)}of{project_distinct}_metals_modeled")
+
+    # Stale-study guard (unchanged) — producer's reserves often extended since an old study.
     if production_elapsed_years is not None and study["study_date"]:
         try:
             study_age_years = (date.today() - date.fromisoformat(study["study_date"])).days / 365.25
@@ -230,6 +318,12 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
                 )
         except ValueError:
             logger.warning("Study %d: unparseable study_date=%r", study_id, study["study_date"])
+
+    # Per-metal columns hold the REPRESENTATIVE leg (I7): the project-primary leg if it is
+    # supported, else the first supported leg (columns are NOT NULL). Aggregate columns
+    # (npv_*) hold the whole-basket result.
+    primary_commodity = study["commodity"]
+    rep = next((r for r in supported if r.commodity == primary_commodity), supported[0])
 
     cur = conn.execute("""
         INSERT INTO revaluations (
@@ -244,9 +338,9 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     """, (
         study_id, study["project_id"], study["company_id"],
         datetime.now(timezone.utc).isoformat(),
-        commodity, float(price_dfs), float(price_spot), price_spot_id,
+        rep.commodity, float(rep.price_dfs_usd), float(rep.price_spot), rep.price_spot_id,
         float(fx_rate) if fx_rate else None, fx_price_id,
-        float(inp.annual_production), production_unit,
+        float(rep.annual_production), rep.annual_production_unit,
         float(inp.mine_life_years), float(result.remaining_life_years),
         float(inp.discount_rate_pct),
         float(result.tax_rate_used), float(result.annuity_factor),
@@ -256,5 +350,28 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         json.dumps(warnings),
         study["study_confidence_tier"],
     ))
+    revaluation_id = cur.lastrowid
+
+    # Full per-leg breakdown (supported + unsupported) → revaluation_legs.
+    leg_delta = dict(result.leg_delta_revenue_usd)
+    for r in resolved:
+        conn.execute("""
+            INSERT INTO revaluation_legs (
+                revaluation_id, commodity, supported,
+                price_dfs, price_spot, price_spot_id,
+                annual_production, annual_production_unit,
+                delta_revenue_annual_usd, dfs_metal_revenue_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            revaluation_id, r.commodity, 1 if r.supported else 0,
+            float(r.price_dfs_usd) if r.price_dfs_usd is not None else None,
+            float(r.price_spot) if r.price_spot is not None else None,
+            r.price_spot_id,
+            float(r.annual_production) if r.annual_production is not None else None,
+            r.annual_production_unit,
+            float(leg_delta.get(r.commodity, Decimal("0"))),
+            float(r.dfs_metal_revenue_usd),
+        ))
+
     conn.commit()
-    return cur.lastrowid
+    return revaluation_id

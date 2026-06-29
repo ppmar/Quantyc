@@ -5,6 +5,7 @@ GET /api/portfolio/companies          — aggregated list with filters
 GET /api/portfolio/companies/<ticker> — per-project breakdown
 """
 
+import json
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
@@ -127,7 +128,7 @@ def portfolio_companies():
     reval_map: dict[str, dict] = {}
     reval_rows = _query_db("""
         SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift, r.npv_uplift_pct,
-               r.price_spot, r.commodity, r.computed_at, s.reporting_currency,
+               r.price_spot, r.commodity, r.computed_at, r.warnings, s.reporting_currency,
                ROW_NUMBER() OVER (
                    PARTITION BY c.company_id
                    ORDER BY
@@ -143,6 +144,17 @@ def portfolio_companies():
     for rv in reval_rows:
         if rv["rn"] == 1:
             npv_dfs = rv["npv_dfs"]
+            # Basket coverage (first_order_v4) parsed from the persisted warning; 100 for
+            # single-commodity v3 rows. A partial basket isn't a full uplift signal (PR5).
+            coverage_pct = 100.0
+            if rv["warnings"]:
+                try:
+                    for w in json.loads(rv["warnings"]):
+                        if isinstance(w, str) and w.startswith("coverage_pct:"):
+                            coverage_pct = float(w.split(":", 1)[1])
+                            break
+                except (ValueError, TypeError):
+                    pass
             reval_map[rv["ticker"]] = {
                 "npv_dfs": npv_dfs,
                 "npv_spot": rv["npv_spot"],
@@ -151,6 +163,8 @@ def portfolio_companies():
                 "commodity": rv["commodity"],
                 "price_spot": rv["price_spot"],
                 "reporting_currency": rv["reporting_currency"],
+                "coverage_pct": coverage_pct,
+                "is_partial_basket": coverage_pct < 100.0,
                 # A huge % on a tiny base is not a strong signal — flag it (I6).
                 "low_base": (npv_dfs is not None and npv_dfs < _LOW_BASE_NPV_M),
             }
@@ -302,6 +316,17 @@ def portfolio_company_detail(ticker: str):
         primary = next((c["commodity"] for c in commodities if c["is_primary"]), None)
         all_comms = [c["commodity"] for c in commodities]
 
+        # Multi-commodity bucket (matches the revaluation guard: distinct commodities
+        # across declared commodities OR resources). These are not yet revaluable by the
+        # single-commodity model — surfaced separately until first_order_v4 values them.
+        n_distinct = _query_one(
+            "SELECT COUNT(DISTINCT commodity) AS n FROM ("
+            "  SELECT commodity FROM project_commodities WHERE project_id = ?"
+            "  UNION SELECT commodity FROM resources WHERE project_id = ?)",
+            (pid, pid),
+        )
+        is_multi_commodity = bool(n_distinct and n_distinct["n"] > 1)
+
         # Latest study
         latest_study = _query_one("""
             SELECT s.study_stage, s.study_date, s.study_confidence_tier,
@@ -363,6 +388,7 @@ def portfolio_company_detail(ticker: str):
             "region": proj["region"],
             "primary_commodity": primary,
             "all_commodities": all_comms,
+            "is_multi_commodity": is_multi_commodity,
             "ownership_pct": proj["ownership_pct"],
             "is_active": is_active,
             "latest_study": latest_study,

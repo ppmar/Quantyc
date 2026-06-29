@@ -326,6 +326,48 @@ def normalize_annual_production(value, unit):
     return value, None
 
 
+def _persist_study_commodities(conn, study_id, result, primary_prod_norm):
+    """Persist the per-metal basket into study_commodities (the canonical production
+    input for first_order_v4). Stored in the SAME representation as studies.annual_production
+    today: normalized to canonical absolute units (oz for Au/Ag, t for everything else),
+    so the downstream per-leg magnitude/Cu guards reproduce the v3 numbers byte-for-byte
+    (I1, I9). Unit verbatim from the LLM is consumed by normalize_annual_production here.
+
+    Null-don't-guess (I8): a by-product with no payable volume → annual_production null →
+    not a supported leg → coverage drops. Never fabricated.
+
+    Back-compat: when the LLM returns no commodity_production list, synthesize the single
+    primary leg from the scalar fields — mirrors the 0015 backfill so a NEW single-metal
+    study is shaped identically to a migrated one (PR4 guarantees ≥1 leg)."""
+    def _base_unit(commodity):
+        return "oz" if commodity in ("Au", "Ag") else "t"
+
+    legs = list(result.commodity_production or [])
+    if legs:
+        for cp in legs:
+            is_primary = 1 if cp.commodity == result.primary_commodity else 0
+            if is_primary:
+                val = primary_prod_norm  # reuse the already-normalized primary scalar
+            else:
+                val, _w = normalize_annual_production(
+                    float(cp.annual_production) if cp.annual_production is not None else None,
+                    cp.annual_production_unit)
+            conn.execute(
+                "INSERT INTO study_commodities (study_id, commodity, annual_production, "
+                "annual_production_unit, recovery_pct, is_primary) VALUES (?, ?, ?, ?, ?, ?)",
+                (study_id, cp.commodity, val, _base_unit(cp.commodity),
+                 float(cp.recovery_pct) if cp.recovery_pct is not None else None, is_primary),
+            )
+    else:
+        conn.execute(
+            "INSERT INTO study_commodities (study_id, commodity, annual_production, "
+            "annual_production_unit, recovery_pct, is_primary) VALUES (?, ?, ?, ?, ?, 1)",
+            (study_id, result.primary_commodity, primary_prod_norm,
+             _base_unit(result.primary_commodity),
+             float(result.recovery_pct) if result.recovery_pct is not None else None),
+        )
+
+
 def _persist_study(doc_id, ticker, result, model_name):
     """Persist study extraction to projects (upsert) + studies (insert). Returns study_id."""
     import json as _json
@@ -456,6 +498,9 @@ def _persist_study(doc_id, ticker, result, model_name):
             _json.dumps(warns),
             header_tier,
         ))
+
+        # Per-metal basket → study_commodities (canonical input for first_order_v4).
+        _persist_study_commodities(conn, cur.lastrowid, result, prod_norm)
 
         # Study-to-stage floor: a freshly parsed DFS/PFS lifts the project to at
         # least feasibility immediately, without waiting for the end-of-run Gemini

@@ -13,6 +13,20 @@ class PriceAssumption(BaseModel):
     unit: str = Field(..., description="e.g., 'USD/oz', 'USD/lb', 'USD/t'")
 
 
+class CommodityProduction(BaseModel):
+    """One PAYABLE metal's annual production (primary or by-product). Parallel to
+    PriceAssumption — together they form the basket the revaluation values per metal.
+
+    Null-don't-guess: a by-product stated only as a unit-cost credit (e.g. 'AISC net
+    of US$80/oz Ag credit') is NOT a volume — leave annual_production null. Never back
+    a volume out of a $/unit credit (see prompt). The unit is recorded verbatim
+    (oz/koz/Moz/t/kt/Mt) so the downstream magnitude heuristics fire per leg."""
+    commodity: str = Field(..., description="Au, Ag, Cu, Ni, Zn, Co, Li2O, U3O8, ...")
+    annual_production: Optional[Decimal] = None
+    annual_production_unit: Optional[str] = None   # verbatim: oz/koz/Moz/t/kt/Mt
+    recovery_pct: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
+
+
 _TIER_BY_TYPE: dict[str, str] = {
     "DFS": "definitive", "Updated DFS": "definitive",
     "Revised DFS": "definitive", "FFS": "definitive",
@@ -58,6 +72,10 @@ class StudyExtraction(BaseModel):
     annual_production: Optional[Decimal] = None
     annual_production_unit: Optional[str] = None
     recovery_pct: Optional[Decimal] = Field(None, ge=Decimal("0"), le=Decimal("100"))
+    commodity_production: list[CommodityProduction] = Field(
+        default_factory=list,
+        description="One entry per PAYABLE metal (primary + by-products). See prompt. "
+                    "The primary entry equals primary_commodity/annual_production.")
     targeted_first_production: Optional[str] = Field(
         None,
         description=(
@@ -106,6 +124,28 @@ class StudyExtraction(BaseModel):
             cur_tokens = sum(t in u for t in ("USD", "US$", "AUD", "A$", "CAD", "C$"))
             if cur_tokens >= 2:
                 self.extraction_warnings.append(f"aisc_unit_malformed:{u}")
+        return self
+
+    @model_validator(mode="after")
+    def _primary_production_consistency(self):
+        """Append (never raise) when commodity_production is given but its primary leg
+        disagrees with the legacy primary_commodity/annual_production scalars. The
+        scalars stay authoritative for back-compat; this only flags the divergence so
+        a mis-grouped basket is visible. Partial-tolerant (I8 — nulls are fine)."""
+        if not self.commodity_production:
+            return self
+        primary = next(
+            (cp for cp in self.commodity_production if cp.commodity == self.primary_commodity),
+            None,
+        )
+        if primary is None:
+            self.extraction_warnings.append(
+                f"primary_commodity_missing_from_basket:{self.primary_commodity}")
+        elif (primary.annual_production is not None
+              and self.annual_production is not None
+              and primary.annual_production != self.annual_production):
+            self.extraction_warnings.append(
+                f"primary_production_mismatch:{primary.annual_production}!={self.annual_production}")
         return self
 
     @model_validator(mode="after")

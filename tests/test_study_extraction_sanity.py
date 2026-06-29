@@ -60,3 +60,57 @@ def test_past_effective_date_kept():
     s = _base(post_tax_npv_millions=Decimal("451"), effective_date=past)
     assert s.effective_date == past
     assert not any("effective_date_in_future" in w for w in s.extraction_warnings)
+
+
+# ── Multi-commodity / commodity_production (first_order_v4) ────────
+
+
+def test_commodity_production_basket_no_mismatch():
+    from parsers.dfs_study_schemas import CommodityProduction
+    s = _base(
+        post_tax_npv_millions=Decimal("451"), annual_production=Decimal("180"),
+        annual_production_unit="koz",
+        commodity_production=[
+            CommodityProduction(commodity="Au", annual_production=Decimal("180"),
+                                annual_production_unit="koz"),
+            CommodityProduction(commodity="Ag", annual_production=Decimal("2.7"),
+                                annual_production_unit="Moz"),
+        ],
+    )
+    assert not any("primary_production_mismatch" in w for w in s.extraction_warnings)
+    assert not any("primary_commodity_missing" in w for w in s.extraction_warnings)
+
+
+def test_primary_production_mismatch_flagged():
+    from parsers.dfs_study_schemas import CommodityProduction
+    s = _base(
+        post_tax_npv_millions=Decimal("451"), annual_production=Decimal("180"),
+        commodity_production=[
+            CommodityProduction(commodity="Au", annual_production=Decimal("999"))],
+    )
+    assert any(w.startswith("primary_production_mismatch") for w in s.extraction_warnings)
+
+
+def test_primary_missing_from_basket_flagged():
+    from parsers.dfs_study_schemas import CommodityProduction
+    s = _base(
+        post_tax_npv_millions=Decimal("451"), primary_commodity="Au",
+        commodity_production=[
+            CommodityProduction(commodity="Ag", annual_production=Decimal("2.7"),
+                                annual_production_unit="Moz")],
+    )
+    assert any(w.startswith("primary_commodity_missing_from_basket") for w in s.extraction_warnings)
+
+
+def test_byproduct_null_volume_allowed():
+    """A by-product with no payable volume (credit-only) is null, not an error (I8)."""
+    from parsers.dfs_study_schemas import CommodityProduction
+    s = _base(
+        post_tax_npv_millions=Decimal("451"), annual_production=Decimal("180"),
+        commodity_production=[
+            CommodityProduction(commodity="Au", annual_production=Decimal("180")),
+            CommodityProduction(commodity="Ag", annual_production=None),  # credit-only
+        ],
+    )
+    ag = next(c for c in s.commodity_production if c.commodity == "Ag")
+    assert ag.annual_production is None

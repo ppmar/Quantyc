@@ -43,6 +43,11 @@ def test_db():
             commodity TEXT NOT NULL,
             is_primary INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE resources (
+            resource_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(project_id),
+            commodity TEXT NOT NULL
+        );
         CREATE TABLE studies (
             study_id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id INTEGER NOT NULL REFERENCES projects(project_id),
@@ -106,6 +111,39 @@ def test_db():
             warnings TEXT,
             study_confidence_tier TEXT
         );
+        CREATE TABLE study_commodities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            study_id INTEGER NOT NULL,
+            commodity TEXT NOT NULL,
+            annual_production REAL,
+            annual_production_unit TEXT,
+            recovery_pct REAL,
+            is_primary INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE revaluation_legs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            revaluation_id INTEGER NOT NULL,
+            commodity TEXT NOT NULL,
+            supported INTEGER NOT NULL,
+            price_dfs REAL, price_spot REAL, price_spot_id INTEGER,
+            annual_production REAL, annual_production_unit TEXT,
+            delta_revenue_annual_usd REAL, dfs_metal_revenue_usd REAL
+        );
+        -- Mirror the prod path (orchestrator persists legs / 0015 backfills them): seed
+        -- the primary study_commodities leg from project_commodities on every study insert.
+        -- Tests set project_commodities BEFORE inserting the study, so the leg commodity is
+        -- correct. Multi-leg baskets insert their own extra rows.
+        CREATE TRIGGER seed_primary_study_commodity AFTER INSERT ON studies
+        BEGIN
+            INSERT INTO study_commodities (study_id, commodity, annual_production,
+                annual_production_unit, recovery_pct, is_primary)
+            SELECT NEW.study_id, pc.commodity, NEW.annual_production,
+                   CASE WHEN pc.commodity IN ('Au','Ag') THEN 'oz' ELSE 't' END,
+                   NEW.recovery_pct, 1
+            FROM project_commodities pc
+            WHERE pc.project_id = NEW.project_id AND pc.is_primary = 1
+            LIMIT 1;
+        END;
     """)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -172,7 +210,7 @@ def test_revalue_study_end_to_end_au(mock_yahoo, test_db):
     assert row["commodity"] == "Au"
     assert row["price_dfs"] == 1900.0
     assert row["price_spot"] == 3520.0
-    assert row["method_version"] == "first_order_v3"
+    assert row["method_version"] == "first_order_v4"
     assert row["npv_spot"] > row["npv_dfs"]
     assert row["npv_uplift"] > 0
     assert row["npv_uplift_pct"] > 0
@@ -222,15 +260,16 @@ def test_revalue_study_silver_moz_scaled(mock_yahoo, test_db):
 
 @patch("revaluation.prices.fetch_yahoo_quote")
 def test_revalue_study_skips_lithium(mock_yahoo, test_db):
-    """Li2O project: returns None, no row inserted."""
-    # Change commodity to Li2O
+    """Li2O-only project: no supported leg -> not_revaluable_no_supported_commodity (I5).
+    No revaluation row is written."""
+    mock_yahoo.side_effect = lambda s: Decimal("0.6452") if s == "AUDUSD=X" else (
+        (_ for _ in ()).throw(ValueError(s)))
     test_db.execute("UPDATE project_commodities SET commodity = 'Li2O' WHERE project_id = 1")
     test_db.commit()
 
     study_id = _insert_gold_dfs(test_db)
-    result = revalue_study(test_db, study_id)
-    assert result is None
-    mock_yahoo.assert_not_called()
+    with pytest.raises(RevaluationError, match=r"not_revaluable_no_supported_commodity"):
+        revalue_study(test_db, study_id)
 
     count = test_db.execute("SELECT COUNT(*) FROM revaluations").fetchone()[0]
     assert count == 0
@@ -385,19 +424,93 @@ def test_revalue_study_cu_normal_t_not_scaled(mock_yahoo, test_db):
     assert row["annual_production"] == 45000.0
 
 
-def test_revalue_blocks_polymetallic(test_db):
-    """A project with >1 primary commodity can't be valued by the single-commodity
-    model -> not_revaluable_polymetallic (CHN Gonneville case)."""
-    test_db.execute("INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (1, 'Cu', 1)")
-    test_db.commit()  # project 1 now has Au* + Cu* (both primary)
-    price_deck = json.dumps([{"commodity": "Au", "price": 1800.0, "unit": "USD/oz"}])
-    test_db.execute("""
+def _cu_au_spot(symbol):
+    if symbol == "GC=F":
+        return Decimal("2600")
+    if symbol == "HG=F":
+        return Decimal("4.50")
+    if symbol == "AUDUSD=X":
+        return Decimal("0.6452")
+    raise ValueError(symbol)
+
+
+def _insert_basket_study(conn, deck, extra_legs):
+    """Insert a definitive USD DFS for project 1 (primary Au, 100koz) and add extra
+    study_commodities legs. The trigger already seeded the Au primary leg."""
+    test_deck = json.dumps(deck)
+    conn.execute("""
         INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date,
             mine_life_years, annual_production, recovery_pct, post_tax_npv, discount_rate_pct,
             tax_rate_pct, assumed_price_deck, reporting_currency)
-        VALUES (1,'DFS','definitive','2024-06-15',10.0,150000.0,90.0,400.0,8.0,30.0,?, 'USD')
-    """, (price_deck,))
+        VALUES (1,'DFS','definitive','2024-06-15',10.0,100000.0,90.0,400.0,8.0,30.0,?, 'USD')
+    """, (test_deck,))
+    sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    for commodity, prod, unit in extra_legs:
+        conn.execute(
+            "INSERT INTO study_commodities (study_id, commodity, annual_production, "
+            "annual_production_unit, is_primary) VALUES (?, ?, ?, ?, 0)",
+            (sid, commodity, prod, unit))
+    conn.commit()
+    return sid
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_cu_au_basket_full_coverage(mock_yahoo, test_db):
+    """Cu-Au, both supported -> valued (no longer quarantined), coverage 100% (I5)."""
+    mock_yahoo.side_effect = _cu_au_spot
+    test_db.execute("INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (1, 'Cu', 0)")
     test_db.commit()
-    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
-    with pytest.raises(RevaluationError, match=r"not_revaluable_polymetallic"):
+    deck = [{"commodity": "Au", "price": 1900.0, "unit": "USD/oz"},
+            {"commodity": "Cu", "price": 3.5, "unit": "USD/lb"}]
+    sid = _insert_basket_study(test_db, deck, [("Cu", 20000.0, "t")])
+    rid = revalue_study(test_db, sid)
+
+    row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (rid,)).fetchone()
+    assert row["method_version"] == "first_order_v4"
+    warns = json.loads(row["warnings"])
+    assert any(w == "coverage_pct:100.0" for w in warns)
+    assert not any("partial_basket_coverage" in w for w in warns)
+
+    legs = test_db.execute(
+        "SELECT commodity, supported FROM revaluation_legs WHERE revaluation_id = ? ORDER BY commodity",
+        (rid,)).fetchall()
+    assert {(r["commodity"], r["supported"]) for r in legs} == {("Au", 1), ("Cu", 1)}
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_cu_au_co_basket_partial_coverage(mock_yahoo, test_db):
+    """Cu-Au-Co: Cu+Au valued, Co recorded as an unsupported leg, coverage < 100% (I3, I4)."""
+    mock_yahoo.side_effect = _cu_au_spot
+    for c in ("Cu", "Co"):
+        test_db.execute("INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (1, ?, 0)", (c,))
+    test_db.commit()
+    deck = [{"commodity": "Au", "price": 1900.0, "unit": "USD/oz"},
+            {"commodity": "Cu", "price": 3.5, "unit": "USD/lb"},
+            {"commodity": "Co", "price": 15.0, "unit": "USD/lb"}]
+    sid = _insert_basket_study(test_db, deck, [("Cu", 20000.0, "t"), ("Co", 1000.0, "t")])
+    rid = revalue_study(test_db, sid)
+
+    row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (rid,)).fetchone()
+    warns = json.loads(row["warnings"])
+    assert any(w.startswith("partial_basket_coverage") for w in warns)
+
+    legs = {r["commodity"]: r for r in test_db.execute(
+        "SELECT * FROM revaluation_legs WHERE revaluation_id = ?", (rid,)).fetchall()}
+    assert legs["Co"]["supported"] == 0
+    assert legs["Co"]["delta_revenue_annual_usd"] == 0.0
+    assert legs["Co"]["dfs_metal_revenue_usd"] > 0  # counts toward coverage denominator
+    assert legs["Cu"]["supported"] == 1 and legs["Au"]["supported"] == 1
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_ni_zn_no_supported_commodity(mock_yahoo, test_db):
+    """Ni-Zn: no supported leg -> not_revaluable_no_supported_commodity (I5)."""
+    mock_yahoo.side_effect = _cu_au_spot
+    test_db.execute("UPDATE project_commodities SET commodity = 'Ni' WHERE project_id = 1")
+    test_db.execute("INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (1, 'Zn', 0)")
+    test_db.commit()
+    deck = [{"commodity": "Ni", "price": 8.0, "unit": "USD/lb"},
+            {"commodity": "Zn", "price": 1.2, "unit": "USD/lb"}]
+    sid = _insert_basket_study(test_db, deck, [("Zn", 5000.0, "t")])  # primary leg seeded as Ni
+    with pytest.raises(RevaluationError, match=r"not_revaluable_no_supported_commodity"):
         revalue_study(test_db, sid)

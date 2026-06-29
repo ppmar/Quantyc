@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Optional
 
 METHOD_VERSION = "first_order_v3"
+METHOD_VERSION_V4 = "first_order_v4"
 DEFAULT_TAX_RATE = Decimal("0.30")
 # |uplift| beyond this ratio (500%) is almost always a bad input (unit mismatch,
 # stale deck far from spot) rather than real leverage — flag it, don't trust it.
@@ -44,6 +45,32 @@ class RevaluationInput:
 
 
 @dataclass(frozen=True)
+class CommodityLeg:
+    """One supported metal in a basket revaluation (first_order_v4). Prices are USD on
+    the metal's own basis (USD/oz for Au/Ag, USD/lb for Cu); production is in canonical
+    absolute units (oz / t) with annual_production_unit naming that basis."""
+    commodity: str
+    price_dfs_usd: Decimal
+    price_spot_usd: Decimal
+    annual_production: Decimal
+    annual_production_unit: str
+
+
+@dataclass(frozen=True)
+class BasketRevaluationInput:
+    """first_order_v4 input. Annuity, tax, FX, npv_dfs are shared project-level terms;
+    only the revenue delta is per-metal. >= 1 supported leg."""
+    legs: tuple[CommodityLeg, ...]
+    mine_life_years: Decimal
+    discount_rate_pct: Decimal
+    tax_rate_pct: Optional[Decimal]
+    npv_dfs: Decimal
+    reporting_currency: str
+    fx_rate: Optional[Decimal] = None
+    production_elapsed_years: Optional[Decimal] = None
+
+
+@dataclass(frozen=True)
 class RevaluationResult:
     annuity_factor: Decimal
     remaining_life_years: Decimal    # life used for the annuity (== mine_life for developers)
@@ -56,6 +83,8 @@ class RevaluationResult:
     tax_rate_used: Decimal
     method_version: str
     warnings: list[str]
+    # v4 only: per-leg annual revenue delta in USD (commodity -> delta). Empty for v3.
+    leg_delta_revenue_usd: tuple[tuple[str, Decimal], ...] = ()
 
 
 class RevaluationError(ValueError):
@@ -258,32 +287,64 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
     # Both prices are USD per invariant I2/I3. Compute uplift in USD.
     delta_price_usd = inp.price_spot_usd - inp.price_dfs_usd
     delta_revenue_annual_usd = normalized_production * delta_price_usd
+
+    return _finalize_revaluation(
+        delta_revenue_annual_usd=delta_revenue_annual_usd,
+        a=a,
+        tax_rate=tax_rate,
+        life=life,
+        npv_dfs=inp.npv_dfs,
+        reporting_currency=inp.reporting_currency,
+        fx_rate=inp.fx_rate,
+        production_elapsed_years=inp.production_elapsed_years,
+        method_version=METHOD_VERSION,
+        warnings=warnings,
+    )
+
+
+def _finalize_revaluation(
+    *,
+    delta_revenue_annual_usd: Decimal,
+    a: Decimal,
+    tax_rate: Decimal,
+    life: Decimal,
+    npv_dfs: Decimal,
+    reporting_currency: str,
+    fx_rate: Optional[Decimal],
+    production_elapsed_years: Optional[Decimal],
+    method_version: str,
+    warnings: list[str],
+    leg_delta_revenue_usd: tuple[tuple[str, Decimal], ...] = (),
+) -> RevaluationResult:
+    """Shared tail of v3 and v4: turn an annual USD revenue delta into the NPV uplift.
+    Everything here is project-level (annuity, tax, FX, npv_dfs), so v4's only divergence
+    from v3 is how delta_revenue_annual_usd was summed — guaranteeing I1 by construction."""
     delta_npv_usd = delta_revenue_annual_usd * a * (Decimal("1") - tax_rate / Decimal("100"))
     delta_npv_usd_millions = delta_npv_usd / Decimal("1000000")
 
     # Convert to reporting currency per invariant I4.
-    if inp.reporting_currency == "USD":
+    if reporting_currency == "USD":
         delta_npv_reporting_currency = delta_npv_usd_millions
-    elif inp.reporting_currency == "AUD":
-        if inp.fx_rate is None:
+    elif reporting_currency == "AUD":
+        if fx_rate is None:
             raise RevaluationError("fx_rate_required_for_aud_reporting")
-        if inp.fx_rate <= 0:
-            raise RevaluationError(f"fx_rate_must_be_positive:{inp.fx_rate}")
+        if fx_rate <= 0:
+            raise RevaluationError(f"fx_rate_must_be_positive:{fx_rate}")
         # fx_rate = USD per AUD (~0.65). amount_aud = amount_usd / fx_rate.
-        delta_npv_reporting_currency = delta_npv_usd_millions / inp.fx_rate
+        delta_npv_reporting_currency = delta_npv_usd_millions / fx_rate
     else:
-        raise RevaluationError(f"unsupported_reporting_currency:{inp.reporting_currency}")
+        raise RevaluationError(f"unsupported_reporting_currency:{reporting_currency}")
 
-    npv_spot = inp.npv_dfs + delta_npv_reporting_currency
-    npv_uplift = npv_spot - inp.npv_dfs
+    npv_spot = npv_dfs + delta_npv_reporting_currency
+    npv_uplift = npv_spot - npv_dfs
     # Denominator |npv_dfs|: a negative study NPV must not flip the sign of
     # the percentage. Zero NPV makes the % undefined — flag, don't hide.
-    if inp.npv_dfs == 0:
+    if npv_dfs == 0:
         npv_uplift_pct = Decimal("0")
         warnings.append("npv_dfs_zero_pct_undefined")
     else:
-        npv_uplift_pct = npv_uplift / abs(inp.npv_dfs)
-        if inp.npv_dfs < 0:
+        npv_uplift_pct = npv_uplift / abs(npv_dfs)
+        if npv_dfs < 0:
             warnings.append("npv_dfs_negative_pct_vs_abs")
 
     if abs(npv_uplift_pct) > EXTREME_UPLIFT_RATIO:
@@ -294,19 +355,76 @@ def revalue(inp: RevaluationInput) -> RevaluationResult:
     # developer's annuity starts at year 1 while the DFS schedules production
     # after a multi-year build: uplift overstated ~(1+r)^build_years).
     warnings.append("royalty_not_netted_uplift_gross_of_royalties")
-    if inp.production_elapsed_years is None:
+    if production_elapsed_years is None:
         warnings.append("developer_pre_production_timing_not_discounted")
 
     return RevaluationResult(
         annuity_factor=a,
         remaining_life_years=life,
-        npv_dfs=inp.npv_dfs,
+        npv_dfs=npv_dfs,
         npv_spot=npv_spot.quantize(Decimal("0.01")),
         npv_uplift=npv_uplift.quantize(Decimal("0.01")),
         npv_uplift_pct=npv_uplift_pct.quantize(Decimal("0.0001")),
         delta_revenue_annual_usd=delta_revenue_annual_usd.quantize(Decimal("0.01")),
         delta_npv_reporting_currency=delta_npv_reporting_currency.quantize(Decimal("0.01")),
         tax_rate_used=tax_rate,
-        method_version=METHOD_VERSION,
+        method_version=method_version,
         warnings=warnings,
+        leg_delta_revenue_usd=leg_delta_revenue_usd,
+    )
+
+
+def revalue_basket(inp: BasketRevaluationInput) -> RevaluationResult:
+    """first_order_v4: multi-commodity basket revaluation. ΔNPV is linear in each price
+    (no cross terms), so the basket ΔNPV = Σ per-metal ΔNPV. Annuity, tax, FX and npv_dfs
+    are computed once and shared (I2). A single-leg input reproduces v3 exactly (I1)."""
+    warnings: list[str] = []
+
+    if not inp.legs:
+        raise RevaluationError("no_supported_legs")
+    for leg in inp.legs:
+        if leg.commodity not in SUPPORTED_COMMODITIES:
+            raise RevaluationError(f"unsupported_commodity:{leg.commodity}")
+
+    tax_rate = inp.tax_rate_pct if inp.tax_rate_pct is not None else DEFAULT_TAX_RATE * 100
+    if inp.tax_rate_pct is None:
+        warnings.append(f"tax_rate_defaulted_to_{DEFAULT_TAX_RATE * 100}pct")
+
+    # Annuity over REMAINING life, shared across legs.
+    life = remaining_life_years(inp.mine_life_years, inp.production_elapsed_years)
+    if inp.production_elapsed_years is not None:
+        warnings.append(
+            f"remaining_life_{life}y_of_{inp.mine_life_years}y_"
+            f"elapsed_{inp.production_elapsed_years}y"
+        )
+    if life <= 0:
+        warnings.append("mine_depleted_no_remaining_life")
+        a = Decimal("0.0000")
+    else:
+        a = annuity_factor(inp.discount_rate_pct, life)
+
+    # Sum revenue deltas across legs; each normalized to its own price basis.
+    delta_revenue_annual_usd = Decimal("0")
+    leg_deltas: list[tuple[str, Decimal]] = []
+    for leg in inp.legs:
+        basis = "oz" if leg.commodity in _OZ_COMMODITIES else "lb"
+        prod_norm, conv_w = normalize_production_to_unit_price_basis(
+            leg.annual_production, leg.annual_production_unit, basis, leg.commodity)
+        warnings.extend(conv_w)
+        leg_delta = prod_norm * (leg.price_spot_usd - leg.price_dfs_usd)
+        delta_revenue_annual_usd += leg_delta
+        leg_deltas.append((leg.commodity, leg_delta.quantize(Decimal("0.01"))))
+
+    return _finalize_revaluation(
+        delta_revenue_annual_usd=delta_revenue_annual_usd,
+        a=a,
+        tax_rate=tax_rate,
+        life=life,
+        npv_dfs=inp.npv_dfs,
+        reporting_currency=inp.reporting_currency,
+        fx_rate=inp.fx_rate,
+        production_elapsed_years=inp.production_elapsed_years,
+        method_version=METHOD_VERSION_V4,
+        warnings=warnings,
+        leg_delta_revenue_usd=tuple(leg_deltas),
     )

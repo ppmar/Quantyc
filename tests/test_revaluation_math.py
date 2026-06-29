@@ -6,9 +6,12 @@ import pytest
 from revaluation.math import (
     RevaluationInput,
     RevaluationError,
+    BasketRevaluationInput,
+    CommodityLeg,
     annuity_factor,
     remaining_life_years,
     revalue,
+    revalue_basket,
 )
 
 
@@ -415,3 +418,85 @@ def test_extreme_uplift_flagged():
     )
     result = revalue(inp)
     assert any(w.startswith("extreme_uplift_check_inputs") for w in result.warnings)
+
+
+# ── first_order_v4 basket revaluation ─────────────────────────────
+
+
+def test_v4_single_leg_matches_v3_regression():
+    """I1: first_order_v4 with one leg reproduces v3 numbers exactly. Same inputs as
+    test_revalue_gold_aud_reporting."""
+    v3 = revalue(RevaluationInput(
+        commodity="Au",
+        price_dfs_usd=Decimal("1900"), price_spot_usd=Decimal("3500"),
+        annual_production=Decimal("180000"), annual_production_unit="oz",
+        mine_life_years=Decimal("10"), discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("985"),
+        reporting_currency="AUD", fx_rate=Decimal("0.6452"),
+    ))
+    v4 = revalue_basket(BasketRevaluationInput(
+        legs=(CommodityLeg("Au", Decimal("1900"), Decimal("3500"),
+                           Decimal("180000"), "oz"),),
+        mine_life_years=Decimal("10"), discount_rate_pct=Decimal("5.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("985"),
+        reporting_currency="AUD", fx_rate=Decimal("0.6452"),
+    ))
+    assert v4.npv_spot == v3.npv_spot
+    assert v4.npv_uplift == v3.npv_uplift
+    assert v4.npv_uplift_pct == v3.npv_uplift_pct
+    assert v4.delta_revenue_annual_usd == v3.delta_revenue_annual_usd
+    assert v4.method_version == "first_order_v4"
+
+
+def test_v4_basket_au_plus_cu():
+    """Basket ΔNPV = Σ per-metal ΔNPV (I2). Hand-computed Au + Cu, USD reporting.
+
+    Au: 180,000 oz * (3500 - 1900)      = 288,000,000 USD/yr
+    Cu: 25,000 t * 2204.62262 lb/t = 55,115,565.5 lb
+        * (4.80 - 3.50)                 = 71,650,235.15 USD/yr
+    ΔRev_total                          = 359,650,235.15 USD/yr
+    A(8%, 15) = 8.5595 ; (1 - 0.30) = 0.70
+    ΔNPV_USD = 359,650,235.15 * 8.5595 * 0.70 / 1e6 = 2,154.86 USD M
+    NPV_spot = 700 + 2154.86 = 2854.86 USD M
+    """
+    result = revalue_basket(BasketRevaluationInput(
+        legs=(
+            CommodityLeg("Au", Decimal("1900"), Decimal("3500"), Decimal("180000"), "oz"),
+            CommodityLeg("Cu", Decimal("3.50"), Decimal("4.80"), Decimal("25000"), "t"),
+        ),
+        mine_life_years=Decimal("15"), discount_rate_pct=Decimal("8.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("700"),
+        reporting_currency="USD", fx_rate=None,
+    ))
+    assert abs(result.delta_revenue_annual_usd - Decimal("359650235.15")) < Decimal("1")
+    assert abs(result.npv_spot - Decimal("2854.86")) < Decimal("2.0")
+    # Per-leg breakdown is carried for persistence (revaluation_legs).
+    legs = dict(result.leg_delta_revenue_usd)
+    assert abs(legs["Au"] - Decimal("288000000")) < Decimal("1")
+    assert abs(legs["Cu"] - Decimal("71650235.15")) < Decimal("1")
+
+
+def test_v4_each_leg_uses_its_own_unit_basis():
+    """Au leg stays in oz; Cu leg converts t→lb. The conversion warning fires for Cu
+    only, proving each leg normalizes to its own basis."""
+    result = revalue_basket(BasketRevaluationInput(
+        legs=(
+            CommodityLeg("Au", Decimal("1900"), Decimal("2000"), Decimal("100000"), "oz"),
+            CommodityLeg("Cu", Decimal("3.50"), Decimal("4.00"), Decimal("10000"), "t"),
+        ),
+        mine_life_years=Decimal("10"), discount_rate_pct=Decimal("8.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("500"),
+        reporting_currency="USD", fx_rate=None,
+    ))
+    conv = [w for w in result.warnings if "converted_production" in w]
+    assert len(conv) == 1 and "10000t" in conv[0]
+
+
+def test_v4_unsupported_leg_raises():
+    with pytest.raises(RevaluationError, match="unsupported_commodity:Ni"):
+        revalue_basket(BasketRevaluationInput(
+            legs=(CommodityLeg("Ni", Decimal("8"), Decimal("9"), Decimal("5000"), "t"),),
+            mine_life_years=Decimal("10"), discount_rate_pct=Decimal("8.0"),
+            tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("500"),
+            reporting_currency="USD", fx_rate=None,
+        ))

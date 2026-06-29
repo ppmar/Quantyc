@@ -408,6 +408,17 @@ def api_company_snapshot(ticker: str):
         commodity_list = [c["commodity"] for c in commodities]
         primary_commodity = next((c["commodity"] for c in commodities if c["is_primary"]), None)
 
+        # Multi-commodity bucket (matches the revaluation guard: distinct commodities
+        # across declared commodities OR resources). Not yet revaluable by the
+        # single-commodity model — surfaced separately until first_order_v4 values them.
+        n_distinct = conn.execute(
+            "SELECT COUNT(DISTINCT commodity) FROM ("
+            "  SELECT commodity FROM project_commodities WHERE project_id = ?"
+            "  UNION SELECT commodity FROM resources WHERE project_id = ?)",
+            (pid, pid),
+        ).fetchone()[0]
+        is_multi_commodity = n_distinct > 1
+
         # Latest resource estimate
         resource_rows = conn.execute(
             """SELECT category, tonnes, grade, grade_unit, contained_metal, contained_metal_unit,
@@ -512,7 +523,7 @@ def api_company_snapshot(ticker: str):
                                 study_date DESC
                        LIMIT 1
                    )
-                   SELECT r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
+                   SELECT r.revaluation_id, r.commodity, r.price_dfs, r.price_spot, r.fx_rate,
                           r.annual_production, r.annual_production_unit,
                           r.mine_life_years, r.discount_rate_pct, r.tax_rate_pct,
                           r.annuity_factor, r.npv_dfs, r.npv_spot,
@@ -536,8 +547,44 @@ def api_company_snapshot(ticker: str):
                         warnings = _rjson.loads(reval_row["warnings"])
                     except Exception:
                         pass
+                # Basket coverage (first_order_v4): the share of DFS metal revenue the
+                # modeled legs cover. Parsed from the persisted warning; defaults to 100
+                # for single-commodity v3 rows that predate the basket model.
+                coverage_pct = 100.0
+                for w in warnings:
+                    if isinstance(w, str) and w.startswith("coverage_pct:"):
+                        try:
+                            coverage_pct = float(w.split(":", 1)[1])
+                        except ValueError:
+                            pass
+                        break
+                # Per-metal breakdown (supported + unsupported legs).
+                reval_legs = []
+                try:
+                    for lg in conn.execute(
+                        "SELECT commodity, supported, price_dfs, price_spot, "
+                        "annual_production, annual_production_unit, delta_revenue_annual_usd, "
+                        "dfs_metal_revenue_usd FROM revaluation_legs "
+                        "WHERE revaluation_id = ? ORDER BY supported DESC, commodity",
+                        (reval_row["revaluation_id"],),
+                    ).fetchall():
+                        reval_legs.append({
+                            "commodity": lg["commodity"],
+                            "supported": bool(lg["supported"]),
+                            "price_dfs": lg["price_dfs"],
+                            "price_spot": lg["price_spot"],
+                            "annual_production": lg["annual_production"],
+                            "annual_production_unit": lg["annual_production_unit"],
+                            "delta_revenue_annual_usd": lg["delta_revenue_annual_usd"],
+                            "dfs_metal_revenue_usd": lg["dfs_metal_revenue_usd"],
+                        })
+                except Exception:
+                    pass  # revaluation_legs table may not exist on older DBs
                 price_unit = "USD/oz" if reval_row["commodity"] in ("Au", "Ag") else "USD/lb"
                 reval_out = {
+                    "coverage_pct": coverage_pct,
+                    "is_partial_basket": coverage_pct < 100.0,
+                    "legs": reval_legs,
                     "commodity": reval_row["commodity"],
                     "price_dfs": reval_row["price_dfs"],
                     "price_spot": reval_row["price_spot"],
@@ -586,6 +633,7 @@ def api_company_snapshot(ticker: str):
             "source": source,
             "commodities": commodity_list,
             "primary_commodity": primary_commodity,
+            "is_multi_commodity": is_multi_commodity,
             "resources": resources_out,
             "resource_date": _fmt_date_display(latest_date) if latest_date else None,
             "study": study_out,
@@ -655,5 +703,16 @@ def api_company_snapshot(ticker: str):
         snapshot["capital"] = capital_section
     if has_projects:
         snapshot["projects"] = projects_data
+        # Revaluation roll-up: how many projects are revalued and the basket coverage,
+        # so a partial basket isn't misread as a full uplift signal (PR5).
+        revalued = [p for p in projects_data if p["revaluation"]]
+        if revalued:
+            covs = [p["revaluation"].get("coverage_pct", 100.0) for p in revalued]
+            snapshot["revaluation_summary"] = {
+                "projects_revalued": len(revalued),
+                "projects_total": len(projects_data),
+                "min_coverage_pct": min(covs),
+                "any_partial_basket": any(c < 100.0 for c in covs),
+            }
 
     return jsonify(snapshot)

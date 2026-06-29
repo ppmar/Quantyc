@@ -138,6 +138,34 @@ downstream system normalizes to absolute units using this — so the unit must b
 - If you cannot determine the unit, leave both production and unit null and add a warning —
   never guess the magnitude.
 
+## Multi-commodity / by-product production
+
+Many studies value a **basket** of metals (a primary plus payable by-products — e.g. a
+copper-gold project, or gold with a silver credit). Populate `commodity_production` with
+**one entry per PAYABLE metal**: the primary metal AND each by-product that the study sells.
+
+- The primary entry MUST equal `primary_commodity` / `annual_production` / its unit. The
+  by-product entries are additional.
+- Every entry follows the SAME payable-production rules as above (§"production must be
+  PAYABLE production") and the SAME unit rules (§"Production unit normalization"): record
+  the number and its EXACT unit (`oz`/`koz`/`Moz`/`t`/`kt`/`Mt`), never pre-multiplied,
+  never mill throughput or concentrate.
+- If a study is single-metal, `commodity_production` has exactly one entry (the primary).
+
+**THE #1 TRAP — by-product credit is NOT a payable volume.** Studies report by-products two ways:
+
+1. As a **payable volume** — "produces on average 2.7 Moz silver per year". This IS a volume:
+   set `annual_production = 2.7`, `annual_production_unit = "Moz"`.
+2. As a **unit-cost credit / offset** — "AISC of US$950/oz net of US$80/oz silver credit",
+   or "by-product credits of US$1.2M/yr". This is **NOT a volume**. Do **NOT** divide the
+   credit by a price to back out ounces. Leave that leg's `annual_production` **null** and
+   add a warning `byproduct_credit_only_no_volume:<commodity>`.
+
+A null by-product volume is the correct, honest answer: the downstream system records the
+leg, drops basket coverage, and says so. A guessed volume corrupts both the valuation and
+the coverage signal — strictly worse than honest partial coverage. When in doubt, null +
+warning (per leg).
+
 ## Targeted first production date
 
 If the study states when FIRST PRODUCTION (first gold / first concentrate / commissioning
@@ -165,6 +193,7 @@ has passed.)
 10. All numeric fields must be single numbers, not ranges. If a value is a range (e.g., "6-7 Mt/yr"), use the midpoint (6.5) and add a warning to extraction_warnings noting the original range.
 11. `effective_date` is the study's "as at" date and can NEVER be after the announcement date, nor in the future. If you cannot find an explicit "as at"/"effective" date, leave it null — do NOT default it to the announcement date.
 12. `annual_production_unit` must always accompany `annual_production` and faithfully match the number's unit (see "Production unit normalization").
+13. `commodity_production`: one entry per PAYABLE metal (primary + by-products), each with its verbatim unit (see "Multi-commodity / by-product production"). A by-product stated only as a unit-cost credit has a null volume — never back a volume out of a $/unit credit.
 
 ## When in doubt
 

@@ -32,6 +32,13 @@ CREATE INDEX IF NOT EXISTS idx_revaluation_legs_reval ON revaluation_legs(revalu
 -- (oz for Au/Ag, t for Cu and everything else) so v3 <-> v4 stays identical (I1).
 -- Idempotent: app.py re-applies every migration on each startup, so the NOT EXISTS
 -- guard stops this INSERT from duplicating legs on reboot.
+--
+-- SINGLE-PRIMARY ONLY (I8): a project with >1 is_primary commodity must NOT be
+-- backfilled — there is only one annual_production scalar, and copying it onto every
+-- metal fabricates by-product volumes (Cu/Ni each getting the gold ounce count). Those
+-- projects get real per-metal legs from re-extraction (commodity_production); until
+-- then they have no legs and are not revalued (correct: honest non-coverage over a
+-- fabricated basket).
 INSERT INTO study_commodities (study_id, commodity, annual_production, annual_production_unit, recovery_pct, is_primary)
 SELECT s.study_id, pc.commodity, s.annual_production,
        CASE WHEN pc.commodity IN ('Au','Ag') THEN 'oz' ELSE 't' END,
@@ -39,4 +46,6 @@ SELECT s.study_id, pc.commodity, s.annual_production,
 FROM studies s
 JOIN project_commodities pc ON pc.project_id = s.project_id AND pc.is_primary = 1
 WHERE s.annual_production IS NOT NULL
+  AND (SELECT COUNT(*) FROM project_commodities pc2
+       WHERE pc2.project_id = s.project_id AND pc2.is_primary = 1) = 1
   AND NOT EXISTS (SELECT 1 FROM study_commodities sc WHERE sc.study_id = s.study_id);

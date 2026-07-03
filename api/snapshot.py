@@ -531,7 +531,7 @@ def api_company_snapshot(ticker: str):
                           r.method_version, r.warnings, r.computed_at,
                           r.study_confidence_tier,
                           cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
-                          s.reporting_currency
+                          s.reporting_currency, s.study_date AS reval_study_date
                    FROM revaluations r
                    JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
                    JOIN studies s ON s.study_id = r.study_id
@@ -580,10 +580,28 @@ def api_company_snapshot(ticker: str):
                         })
                 except Exception:
                     pass  # revaluation_legs table may not exist on older DBs
+                # Staleness at read time (covers pre-existing reval rows): an old study's
+                # deck and cost base are outdated — big uplift = restudy needed, not signal.
+                study_age_years = None
+                if reval_row["reval_study_date"]:
+                    try:
+                        from datetime import date as _date
+                        study_age_years = round(
+                            (_date.today()
+                             - _date.fromisoformat(reval_row["reval_study_date"][:10])).days
+                            / 365.25, 1)
+                    except ValueError:
+                        pass
+                deck_far_below_spot = (
+                    reval_row["price_dfs"] is not None and reval_row["price_spot"] is not None
+                    and reval_row["price_dfs"] < reval_row["price_spot"] / 2)
                 price_unit = "USD/oz" if reval_row["commodity"] in ("Au", "Ag") else "USD/lb"
                 reval_out = {
                     "coverage_pct": coverage_pct,
                     "is_partial_basket": coverage_pct < 100.0,
+                    "study_age_years": study_age_years,
+                    "is_stale_study": (study_age_years is not None and study_age_years > 3.0),
+                    "deck_far_below_spot": deck_far_below_spot,
                     "legs": reval_legs,
                     "commodity": reval_row["commodity"],
                     "price_dfs": reval_row["price_dfs"],

@@ -157,7 +157,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
                s.recovery_pct, s.post_tax_npv, s.discount_rate_pct, s.tax_rate_pct,
                s.assumed_price_deck, s.reporting_currency, s.study_stage,
                s.study_confidence_tier, s.header_tier,
-               p.project_id, p.company_id, p.production_start_date,
+               p.project_id, p.company_id, p.production_start_date, p.stage,
                pc.commodity, pc.is_primary
         FROM studies s
         JOIN projects p ON p.project_id = s.project_id
@@ -307,17 +307,35 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     if project_distinct > len(resolved):
         warnings.append(f"basket_legs_incomplete:{len(resolved)}of{project_distinct}_metals_modeled")
 
-    # Stale-study guard (unchanged) — producer's reserves often extended since an old study.
-    if production_elapsed_years is not None and study["study_date"]:
+    # Stale-study guards. An old study's deck AND cost base are both fantasy at today's
+    # prices — a huge uplift off a 2017-2020 deck flags "restudy needed", not "buy".
+    if study["study_date"]:
         try:
             study_age_years = (date.today() - date.fromisoformat(study["study_date"])).days / 365.25
             if study_age_years > STALE_STUDY_YEARS:
                 warnings.append(
-                    f"depletion_from_stale_study:study_date={study['study_date']}_"
-                    f"age={study_age_years:.1f}y_remaining_life_may_be_understated"
+                    f"stale_study:age={study_age_years:.1f}y_deck_and_costs_outdated"
                 )
+                if production_elapsed_years is not None:
+                    warnings.append(
+                        f"depletion_from_stale_study:study_date={study['study_date']}_"
+                        f"age={study_age_years:.1f}y_remaining_life_may_be_understated"
+                    )
         except ValueError:
             logger.warning("Study %d: unparseable study_date=%r", study_id, study["study_date"])
+
+    # Deck-vs-spot divergence: when the deck price is under half of spot for any supported
+    # leg, the study predates the price regime entirely — same restudy-needed signal.
+    for r in supported:
+        if r.price_spot and r.price_dfs_usd and r.price_dfs_usd < r.price_spot / 2:
+            warnings.append(
+                f"deck_far_below_spot_{r.commodity}:{r.price_dfs_usd}_vs_{r.price_spot}"
+            )
+
+    # A producing project with no production_start_date gets NO depletion — the annuity
+    # runs over the study's full life, overstating uplift for a mine already part-mined.
+    if study["stage"] == "production" and production_elapsed_years is None:
+        warnings.append("producer_missing_start_date_no_depletion_uplift_overstated")
 
     # Per-metal columns hold the REPRESENTATIVE leg (I7): the project-primary leg if it is
     # supported, else the first supported leg (columns are NOT NULL). Aggregate columns

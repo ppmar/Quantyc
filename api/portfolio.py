@@ -25,6 +25,10 @@ _STAGE_RANK = {s: i for i, s in enumerate(STAGE_ORDER)}
 # its small base and must not be ranked on % alone. Tunable; not ticker-specific.
 _LOW_BASE_NPV_M = 50.0
 
+# Studies older than this have an outdated price deck AND cost base: their uplift
+# means "restudy needed", not signal. Mirrors revaluation.pipeline.STALE_STUDY_YEARS.
+_STALE_STUDY_YEARS = 3.0
+
 
 def _most_advanced_stage(stages: list[str]) -> str | None:
     if not stages:
@@ -128,7 +132,8 @@ def portfolio_companies():
     reval_map: dict[str, dict] = {}
     reval_rows = _query_db("""
         SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift, r.npv_uplift_pct,
-               r.price_spot, r.commodity, r.computed_at, r.warnings, s.reporting_currency,
+               r.price_spot, r.price_dfs, r.commodity, r.computed_at, r.warnings,
+               s.reporting_currency, s.study_date,
                ROW_NUMBER() OVER (
                    PARTITION BY c.company_id
                    ORDER BY
@@ -155,6 +160,22 @@ def portfolio_companies():
                             break
                 except (ValueError, TypeError):
                     pass
+            # Staleness computed at read time from study_date so it covers every
+            # existing reval row, not just freshly recomputed ones. An old study's
+            # deck AND cost base are outdated: a big uplift off a stale study means
+            # "restudy needed", not a tradeable signal.
+            study_age_years = None
+            if rv["study_date"]:
+                try:
+                    study_age_years = round(
+                        (datetime.now(timezone.utc).date()
+                         - datetime.strptime(rv["study_date"][:10], "%Y-%m-%d").date()).days
+                        / 365.25, 1)
+                except ValueError:
+                    pass
+            deck_far_below_spot = (
+                rv["price_dfs"] is not None and rv["price_spot"] is not None
+                and rv["price_dfs"] < rv["price_spot"] / 2)
             reval_map[rv["ticker"]] = {
                 "npv_dfs": npv_dfs,
                 "npv_spot": rv["npv_spot"],
@@ -165,6 +186,9 @@ def portfolio_companies():
                 "reporting_currency": rv["reporting_currency"],
                 "coverage_pct": coverage_pct,
                 "is_partial_basket": coverage_pct < 100.0,
+                "study_age_years": study_age_years,
+                "is_stale_study": (study_age_years is not None and study_age_years > _STALE_STUDY_YEARS),
+                "deck_far_below_spot": deck_far_below_spot,
                 # A huge % on a tiny base is not a strong signal — flag it (I6).
                 "low_base": (npv_dfs is not None and npv_dfs < _LOW_BASE_NPV_M),
             }

@@ -514,3 +514,33 @@ def test_revalue_ni_zn_no_supported_commodity(mock_yahoo, test_db):
     sid = _insert_basket_study(test_db, deck, [("Zn", 5000.0, "t")])  # primary leg seeded as Ni
     with pytest.raises(RevaluationError, match=r"not_revaluable_no_supported_commodity"):
         revalue_study(test_db, sid)
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_stale_study_warned_even_for_developer(mock_yahoo, test_db):
+    """A >3y-old study gets stale_study on every reval (not just producers):
+    old deck + old cost base = restudy needed, not signal (PRU/HAV/PNR class)."""
+    mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4000"), "AUDUSD=X": Decimal("0.6452")}[s]
+    sid = _insert_gold_dfs(test_db)
+    test_db.execute("UPDATE studies SET study_date='2019-06-15' WHERE study_id=?", (sid,))
+    test_db.commit()
+    rid = revalue_study(test_db, sid)
+    warns = json.loads(test_db.execute(
+        "SELECT warnings FROM revaluations WHERE revaluation_id=?", (rid,)).fetchone()[0])
+    assert any(w.startswith("stale_study:") for w in warns)
+    # deck 1900 < 4000/2 -> divergence flag too
+    assert any(w.startswith("deck_far_below_spot_Au") for w in warns)
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_producer_without_start_date_warned(mock_yahoo, test_db):
+    """stage=production but production_start_date NULL -> no depletion applied,
+    uplift overstated (PNR Norseman case). Must be flagged."""
+    mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4000"), "AUDUSD=X": Decimal("0.6452")}[s]
+    test_db.execute("UPDATE projects SET stage='production' WHERE project_id=1")
+    test_db.commit()
+    sid = _insert_gold_dfs(test_db)
+    rid = revalue_study(test_db, sid)
+    warns = json.loads(test_db.execute(
+        "SELECT warnings FROM revaluations WHERE revaluation_id=?", (rid,)).fetchone()[0])
+    assert "producer_missing_start_date_no_depletion_uplift_overstated" in warns

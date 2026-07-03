@@ -500,3 +500,17 @@ def test_v4_unsupported_leg_raises():
             tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("500"),
             reporting_currency="USD", fx_rate=None,
         ))
+
+
+def test_au_production_above_1moz_refused():
+    """A per-project Au figure > 1 Moz/yr is a LOM total mislabelled annual
+    (RMS Never Never: 1.8 Moz LOM -> NPV_spot A$18.8B). Refuse, don't guess."""
+    from revaluation.math import apply_production_magnitude_heuristic
+    with pytest.raises(RevaluationError, match="au_production_implausible_check_lom"):
+        apply_production_magnitude_heuristic("Au", Decimal("1800000"))
+
+
+def test_au_production_just_below_cap_passes():
+    from revaluation.math import apply_production_magnitude_heuristic
+    val, warn = apply_production_magnitude_heuristic("Au", Decimal("950000"))
+    assert val == Decimal("950000") and warn is None

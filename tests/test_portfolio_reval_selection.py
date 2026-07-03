@@ -32,7 +32,7 @@ def _seed(db_path: str) -> None:
             project_id INTEGER, commodity TEXT);
         CREATE TABLE revaluations (revaluation_id INTEGER PRIMARY KEY AUTOINCREMENT,
             study_id INTEGER, company_id INTEGER, computed_at TEXT, commodity TEXT,
-            price_spot REAL, npv_dfs REAL, npv_spot REAL, npv_uplift REAL,
+            price_dfs REAL, price_spot REAL, npv_dfs REAL, npv_spot REAL, npv_uplift REAL,
             npv_uplift_pct REAL, warnings TEXT);
         """
     )

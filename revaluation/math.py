@@ -105,7 +105,16 @@ def apply_production_magnitude_heuristic(
         land there; a guess can be 1000x wrong, so refuse.
     Cu: a DFS/PFS project is never below ~thousands of t/yr contained Cu ->
         a figure < 100 is kt, x1000.
+
+    Upper bound (Au): no ASX/TSX junior produces > 1 Moz/yr from one project
+    (that is world-top-five scale). A larger figure is a LOM total mislabelled
+    as annual (RMS Never Never: 1.8 Moz LOM extracted as 1,800,000 oz/yr ->
+    NPV_spot A$18.8B). Refuse — a wrong /yr basis corrupts the whole reval.
     """
+    if commodity == "Au" and annual_production > 1_000_000:
+        raise RevaluationError(
+            f"au_production_implausible_check_lom:{annual_production}oz_per_year"
+        )
     if commodity == "Au" and annual_production < 1000:
         scaled = annual_production * 1000
         return scaled, f"production_magnitude_scaled_Au_{annual_production}_x1000"

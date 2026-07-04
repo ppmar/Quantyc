@@ -95,6 +95,15 @@ def _fmt_shares(val: float | None) -> str | None:
     return str(int(val))
 
 
+def _reval_npv_review(reval_row) -> str:
+    """Review reasons that cast doubt on the reval's NPV base; benign ones filtered."""
+    if not reval_row["reval_needs_review"] or not reval_row["reval_review_reason"]:
+        return ""
+    keep = [r.strip() for r in reval_row["reval_review_reason"].split(";")
+            if r.strip() and ("npv_ge_pre" in r or "implied_tax_gap" in r or "npv_post" in r)]
+    return "; ".join(keep)
+
+
 def _fmt_date_display(iso_date: str | None) -> str:
     """'2025-12-31' → '31 Dec 2025'"""
     if not iso_date:
@@ -603,11 +612,10 @@ def api_company_snapshot(ticker: str):
                     "study_age_years": study_age_years,
                     "is_stale_study": (study_age_years is not None and study_age_years > 3.0),
                     "deck_far_below_spot": deck_far_below_spot,
-                    # Weak-signal flag: the underlying study is review-flagged (e.g.
-                    # post_tax == pre_tax NPV) — the reval base may be wrong.
-                    "study_needs_review": bool(reval_row["reval_needs_review"]),
-                    "study_review_reason": (reval_row["reval_review_reason"]
-                                            if reval_row["reval_needs_review"] else None),
+                    # Weak-signal flag ONLY for reasons impugning the NPV base (post==pre,
+                    # implied tax gap). missing_tax_rate etc. are benign for the reval.
+                    "study_needs_review": bool(_reval_npv_review(reval_row)),
+                    "study_review_reason": _reval_npv_review(reval_row) or None,
                     "legs": reval_legs,
                     "commodity": reval_row["commodity"],
                     "price_dfs": reval_row["price_dfs"],

@@ -30,6 +30,15 @@ _LOW_BASE_NPV_M = 50.0
 _STALE_STUDY_YEARS = 3.0
 
 
+def _npv_review_reasons(reason: str | None) -> str:
+    """Keep only review reasons that cast doubt on the NPV base used by the reval."""
+    if not reason:
+        return ""
+    keep = [r.strip() for r in reason.split(";")
+            if r.strip() and ("npv_ge_pre" in r or "implied_tax_gap" in r or "npv_post" in r)]
+    return "; ".join(keep)
+
+
 def _most_advanced_stage(stages: list[str]) -> str | None:
     if not stages:
         return None
@@ -189,10 +198,12 @@ def portfolio_companies():
                 "study_age_years": study_age_years,
                 "is_stale_study": (study_age_years is not None and study_age_years > _STALE_STUDY_YEARS),
                 "deck_far_below_spot": deck_far_below_spot,
-                # A reval built on a review-flagged study (e.g. post_tax == pre_tax) is a
-                # weak signal and must say so (BTR Menzies: NPV base may be pre-tax).
-                "study_needs_review": bool(rv["needs_review"]),
-                "study_review_reason": rv["review_reason"] if rv["needs_review"] else None,
+                # A reval built on a review-flagged study is a weak signal ONLY when the
+                # flag impugns the NPV base itself (BTR: post_tax == pre_tax; MM8: implied
+                # tax gap). missing_tax_rate / missing_pre_tax_npv are benign here — the
+                # reval defaults the tax rate and never uses pre-tax NPV.
+                "study_needs_review": bool(_npv_review_reasons(rv["review_reason"]) if rv["needs_review"] else None),
+                "study_review_reason": (_npv_review_reasons(rv["review_reason"]) or None) if rv["needs_review"] else None,
                 # A huge % on a tiny base is not a strong signal — flag it (I6).
                 "low_base": (npv_dfs is not None and npv_dfs < _LOW_BASE_NPV_M),
             }

@@ -801,7 +801,7 @@ def _mark_skipped(doc_id: int) -> None:
 def _mark_parsed(doc_id: int) -> None:
     conn = get_connection()
     conn.execute(
-        "UPDATE documents SET parse_status = 'parsed' WHERE document_id = ?",
+        "UPDATE documents SET parse_status = 'parsed', parse_error = NULL WHERE document_id = ?",
         (doc_id,),
     )
     conn.commit()

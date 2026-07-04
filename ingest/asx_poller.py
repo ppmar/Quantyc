@@ -506,8 +506,10 @@ def _mark_status(doc_id: int, status: str, error: str | None = None) -> None:
             (status, error, doc_id),
         )
     else:
+        # Clear any stale error from an earlier failed attempt — a parsed doc must not
+        # carry a leftover parse_error (135 such rows found in the Jul-2026 prod scan).
         conn.execute(
-            "UPDATE documents SET parse_status = ? WHERE document_id = ?",
+            "UPDATE documents SET parse_status = ?, parse_error = NULL WHERE document_id = ?",
             (status, doc_id),
         )
     conn.commit()

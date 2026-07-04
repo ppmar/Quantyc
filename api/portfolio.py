@@ -133,7 +133,7 @@ def portfolio_companies():
     reval_rows = _query_db("""
         SELECT c.ticker, r.npv_dfs, r.npv_spot, r.npv_uplift, r.npv_uplift_pct,
                r.price_spot, r.price_dfs, r.commodity, r.computed_at, r.warnings,
-               s.reporting_currency, s.study_date,
+               s.reporting_currency, s.study_date, s.needs_review, s.review_reason,
                ROW_NUMBER() OVER (
                    PARTITION BY c.company_id
                    ORDER BY
@@ -189,6 +189,10 @@ def portfolio_companies():
                 "study_age_years": study_age_years,
                 "is_stale_study": (study_age_years is not None and study_age_years > _STALE_STUDY_YEARS),
                 "deck_far_below_spot": deck_far_below_spot,
+                # A reval built on a review-flagged study (e.g. post_tax == pre_tax) is a
+                # weak signal and must say so (BTR Menzies: NPV base may be pre-tax).
+                "study_needs_review": bool(rv["needs_review"]),
+                "study_review_reason": rv["review_reason"] if rv["needs_review"] else None,
                 # A huge % on a tiny base is not a strong signal — flag it (I6).
                 "low_base": (npv_dfs is not None and npv_dfs < _LOW_BASE_NPV_M),
             }

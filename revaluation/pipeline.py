@@ -156,7 +156,7 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
         SELECT s.study_id, s.project_id, s.study_date, s.mine_life_years, s.annual_production,
                s.recovery_pct, s.post_tax_npv, s.discount_rate_pct, s.tax_rate_pct,
                s.assumed_price_deck, s.reporting_currency, s.study_stage,
-               s.study_confidence_tier, s.header_tier,
+               s.study_confidence_tier, s.header_tier, s.needs_review, s.review_reason,
                p.project_id, p.company_id, p.production_start_date, p.stage,
                pc.commodity, pc.is_primary
         FROM studies s
@@ -336,6 +336,11 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
     # runs over the study's full life, overstating uplift for a mine already part-mined.
     if study["stage"] == "production" and production_elapsed_years is None:
         warnings.append("producer_missing_start_date_no_depletion_uplift_overstated")
+
+    # The study itself is review-flagged (e.g. post_tax == pre_tax NPV): the reval base
+    # may be wrong, so the result is a weak signal and must carry the flag.
+    if study["needs_review"]:
+        warnings.append(f"study_needs_review:{study['review_reason'] or 'unspecified'}")
 
     # Per-metal columns hold the REPRESENTATIVE leg (I7): the project-primary leg if it is
     # supported, else the first supported leg (columns are NOT NULL). Aggregate columns

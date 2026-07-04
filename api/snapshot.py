@@ -531,7 +531,8 @@ def api_company_snapshot(ticker: str):
                           r.method_version, r.warnings, r.computed_at,
                           r.study_confidence_tier,
                           cp.source AS spot_source, cp.fetched_at AS spot_fetched_at,
-                          s.reporting_currency, s.study_date AS reval_study_date
+                          s.reporting_currency, s.study_date AS reval_study_date,
+                          s.needs_review AS reval_needs_review, s.review_reason AS reval_review_reason
                    FROM revaluations r
                    JOIN commodity_prices cp ON cp.price_id = r.price_spot_id
                    JOIN studies s ON s.study_id = r.study_id
@@ -602,6 +603,11 @@ def api_company_snapshot(ticker: str):
                     "study_age_years": study_age_years,
                     "is_stale_study": (study_age_years is not None and study_age_years > 3.0),
                     "deck_far_below_spot": deck_far_below_spot,
+                    # Weak-signal flag: the underlying study is review-flagged (e.g.
+                    # post_tax == pre_tax NPV) — the reval base may be wrong.
+                    "study_needs_review": bool(reval_row["reval_needs_review"]),
+                    "study_review_reason": (reval_row["reval_review_reason"]
+                                            if reval_row["reval_needs_review"] else None),
                     "legs": reval_legs,
                     "commodity": reval_row["commodity"],
                     "price_dfs": reval_row["price_dfs"],

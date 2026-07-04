@@ -74,7 +74,9 @@ def test_db():
             payback_years REAL,
             extraction_method TEXT,
             extraction_model TEXT,
-            tax_rate_pct REAL
+            tax_rate_pct REAL,
+            needs_review INTEGER DEFAULT 0,
+            review_reason TEXT
         );
         CREATE TABLE commodity_prices (
             price_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,3 +546,19 @@ def test_producer_without_start_date_warned(mock_yahoo, test_db):
     warns = json.loads(test_db.execute(
         "SELECT warnings FROM revaluations WHERE revaluation_id=?", (rid,)).fetchone()[0])
     assert "producer_missing_start_date_no_depletion_uplift_overstated" in warns
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_review_flagged_study_reval_carries_flag(mock_yahoo, test_db):
+    """A needs_review study (e.g. post_tax == pre_tax NPV, BTR Menzies) still revalues
+    but the result must carry study_needs_review — a flagged base is a weak signal."""
+    mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4000"), "AUDUSD=X": Decimal("0.6452")}[s]
+    sid = _insert_gold_dfs(test_db)
+    test_db.execute(
+        "UPDATE studies SET needs_review=1, review_reason='post_tax_npv_ge_pre_tax_npv' "
+        "WHERE study_id=?", (sid,))
+    test_db.commit()
+    rid = revalue_study(test_db, sid)
+    warns = json.loads(test_db.execute(
+        "SELECT warnings FROM revaluations WHERE revaluation_id=?", (rid,)).fetchone()[0])
+    assert "study_needs_review:post_tax_npv_ge_pre_tax_npv" in warns

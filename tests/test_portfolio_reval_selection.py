@@ -27,7 +27,7 @@ def _seed(db_path: str) -> None:
         CREATE TABLE studies (study_id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id INTEGER, document_id INTEGER, study_stage TEXT,
             study_confidence_tier TEXT, study_date TEXT, post_tax_npv REAL,
-            reporting_currency TEXT);
+            reporting_currency TEXT, needs_review INTEGER DEFAULT 0, review_reason TEXT);
         CREATE TABLE resources (resource_id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id INTEGER, commodity TEXT);
         CREATE TABLE revaluations (revaluation_id INTEGER PRIMARY KEY AUTOINCREMENT,

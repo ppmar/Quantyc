@@ -76,7 +76,9 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
             payback_years REAL,
             extraction_method TEXT,
             extraction_model TEXT,
-            tax_rate_pct REAL
+            tax_rate_pct REAL,
+            needs_review INTEGER DEFAULT 0,
+            review_reason TEXT
         );
         CREATE TABLE resources (
             resource_id INTEGER PRIMARY KEY AUTOINCREMENT,

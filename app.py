@@ -226,6 +226,21 @@ def _run_ingest(tickers, count):
         else:
             logger.info("Stage classification skipped — backfill already running")
 
+        # Refresh revaluations at current spot (the daily price refresh — without it
+        # npv_spot freezes at the spot of the last write). Pure math + cached spot,
+        # no LLM; only latest-revaluable studies older than 20h. Non-fatal.
+        pipeline_status["phase"] = "refreshing_revaluations"
+        try:
+            from revaluation.pipeline import refresh_stale_revaluations
+            _rconn = get_connection()
+            try:
+                reval_stats = refresh_stale_revaluations(_rconn)
+            finally:
+                _rconn.close()
+            logger.info("Revaluation refresh: %s", reval_stats)
+        except Exception:
+            logger.warning("Revaluation refresh failed (non-fatal):\n%s", traceback.format_exc())
+
         failed = pipeline_status.get("failed_count", 0)
         pipeline_status["phase"] = "done_with_errors" if failed > 0 else "done"
         pipeline_status["running"] = False

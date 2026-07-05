@@ -608,3 +608,56 @@ def test_revalue_u3o8_ambiguous_band_refused(mock_yahoo, test_db):
     sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
     with pytest.raises(RevaluationError, match="u3o8_production_unit_ambiguous"):
         revalue_study(test_db, sid)
+
+
+# ── Daily reval refresh ───────────────────────────────────────────
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_refresh_recomputes_stale_reval(mock_yahoo, test_db):
+    """A latest-revaluable study whose newest reval is older than the cutoff gets a
+    fresh row at current spot; a fresh one is left alone (no churn within a day)."""
+    from revaluation.pipeline import refresh_stale_revaluations
+    mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4000"), "AUDUSD=X": Decimal("0.6452")}[s]
+    sid = _insert_gold_dfs(test_db)
+    rid1 = revalue_study(test_db, sid)
+    # Age the row -> stale -> refresh writes a second row
+    test_db.execute("UPDATE revaluations SET computed_at='2026-06-12T00:00:00+00:00' WHERE revaluation_id=?", (rid1,))
+    test_db.commit()
+    mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4200"), "AUDUSD=X": Decimal("0.6452")}[s]
+    # expire the cached spot rows too, else get_or_fetch_price reuses the 4000 print
+    test_db.execute("UPDATE commodity_prices SET fetched_at='2026-06-12T00:00:00+00:00'")
+    test_db.commit()
+    stats = refresh_stale_revaluations(test_db)
+    assert stats == {"refreshed": 1, "skipped_fresh": 0, "errors": 0}
+    rows = test_db.execute(
+        "SELECT price_spot FROM revaluations WHERE study_id=? ORDER BY computed_at", (sid,)).fetchall()
+    assert len(rows) == 2 and rows[1]["price_spot"] == 4200.0
+    # Second sweep: newest row is fresh -> nothing to do
+    stats2 = refresh_stale_revaluations(test_db)
+    assert stats2 == {"refreshed": 0, "skipped_fresh": 0, "errors": 0}
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_refresh_skips_superseded_study(mock_yahoo, test_db):
+    """A superseded (older) study's reval is never refreshed — only the project's
+    latest revaluable study stays current; history doesn't churn."""
+    from revaluation.pipeline import refresh_stale_revaluations
+    mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4000"), "AUDUSD=X": Decimal("0.6452")}[s]
+    old_sid = _insert_gold_dfs(test_db)                       # 2024-06-15
+    rid = revalue_study(test_db, old_sid)
+    test_db.execute("UPDATE revaluations SET computed_at='2026-06-12T00:00:00+00:00' WHERE revaluation_id=?", (rid,))
+    # Newer DFS supersedes it (no reval yet — refresh must not touch either:
+    # the newer one has no reval row, the older one is superseded).
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date,
+            mine_life_years, annual_production, recovery_pct, post_tax_npv, discount_rate_pct,
+            tax_rate_pct, assumed_price_deck, reporting_currency)
+        VALUES (1,'DFS','definitive','2025-10-01',10.0,150000.0,90.0,900.0,5.0,30.0,
+                '[{"commodity":"Au","price":2500,"unit":"USD/oz"}]','AUD')
+    """)
+    test_db.commit()
+    stats = refresh_stale_revaluations(test_db)
+    assert stats["refreshed"] == 0
+    n = test_db.execute("SELECT COUNT(*) FROM revaluations WHERE study_id=?", (old_sid,)).fetchone()[0]
+    assert n == 1  # superseded study untouched

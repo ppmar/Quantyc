@@ -405,3 +405,56 @@ def revalue_study(conn: sqlite3.Connection, study_id: int) -> Optional[int]:
 
     conn.commit()
     return revaluation_id
+
+
+def refresh_stale_revaluations(conn: sqlite3.Connection, max_age_hours: float = 20.0) -> dict:
+    """Recompute revaluations at current spot for every project's LATEST revaluable
+    study whose newest reval row is older than max_age_hours.
+
+    This is the daily price-refresh: without it the screen's npv_spot freezes at the
+    spot of the last write (June 2026: three weeks stale). Pure math + cached spot
+    fetches — no LLM. Append-only: each refresh inserts a new reval row; the read
+    paths already select the newest. Superseded studies are never refreshed (only the
+    latest revaluable study per project), so history doesn't churn.
+
+    Per-study failures are counted, never raised — one bad study must not stop the
+    sweep. Returns stats {refreshed, skipped_fresh, errors}.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+
+    stale = conn.execute("""
+        WITH latest_revaluable AS (
+            SELECT study_id FROM (
+                SELECT s.study_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY s.project_id
+                           ORDER BY CASE WHEN s.study_date IS NULL OR s.study_date <= date('now')
+                                         THEN 0 ELSE 1 END,
+                                    COALESCE(s.study_date, '') DESC
+                       ) AS rn
+                FROM studies s
+                WHERE s.study_confidence_tier IN ('definitive', 'indicative')
+                   OR (s.study_confidence_tier IS NULL AND s.study_stage IN
+                       ('DFS', 'Updated DFS', 'Revised DFS', 'FFS', 'PFS', 'Updated PFS'))
+            ) WHERE rn = 1
+        )
+        SELECT r.study_id, MAX(r.computed_at) AS last_computed
+        FROM revaluations r
+        JOIN latest_revaluable lr ON lr.study_id = r.study_id
+        GROUP BY r.study_id
+        HAVING last_computed < ?
+    """, (cutoff,)).fetchall()
+
+    stats = {"refreshed": 0, "skipped_fresh": 0, "errors": 0}
+    for row in stale:
+        try:
+            if revalue_study(conn, row["study_id"]):
+                stats["refreshed"] += 1
+        except (RevaluationError, PriceFetchError) as e:
+            stats["errors"] += 1
+            logger.warning("Reval refresh failed for study %d: %s", row["study_id"], e)
+        except Exception:
+            stats["errors"] += 1
+            logger.error("Reval refresh unexpected error for study %d", row["study_id"], exc_info=True)
+    return stats

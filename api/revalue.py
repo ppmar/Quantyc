@@ -75,3 +75,23 @@ def revalue_backfill():
         "skipped": skipped,
         "errors": errors,
     })
+
+
+@bp.route("/api/revalue/refresh", methods=["POST"])
+def revalue_refresh():
+    """Recompute revaluations at current spot for stale latest-revaluable studies.
+
+    Optional JSON body: { "max_age_hours": 20 }. Also chained onto every ingest run,
+    so the daily scheduler keeps npv_spot current without this being called.
+    """
+    from revaluation.pipeline import refresh_stale_revaluations
+
+    data = request.get_json(silent=True) or {}
+    max_age = float(data.get("max_age_hours", 20))
+
+    conn = get_connection()
+    try:
+        stats = refresh_stale_revaluations(conn, max_age_hours=max_age)
+    finally:
+        conn.close()
+    return jsonify(stats)

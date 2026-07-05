@@ -23,6 +23,7 @@ const PHASE_LABELS: Record<string, string> = {
   normalizing: "Normalizing",
   loading: "Loading",
   classifying_stages: "Classifying stages",
+  refreshing_revaluations: "Refreshing revaluations",
   done: "Complete",
   done_with_errors: "Complete with errors",
   error: "Error",

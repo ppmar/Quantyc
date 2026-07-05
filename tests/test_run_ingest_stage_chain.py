@@ -56,3 +56,16 @@ def test_classification_skipped_when_guard_already_held():
 
     mock_bf.assert_not_called()  # never concurrent with the endpoint path
     assert app_module.pipeline_status["phase"] == "done"
+
+
+def test_ingest_runs_reval_refresh_non_fatal():
+    _reset_status()
+    with patch("ingest.asx_poller.poll_tickers"), \
+         patch("ingest.ozmin_loader.load_ozmin", return_value={}), \
+         patch("scripts.backfill_project_stages.run_backfill", return_value={}), \
+         patch("revaluation.pipeline.refresh_stale_revaluations",
+               side_effect=RuntimeError("yahoo down")) as mock_rf, \
+         patch("app.get_connection"):
+        app_module._run_ingest(["DEG"], 20)
+    mock_rf.assert_called_once()
+    assert app_module.pipeline_status["phase"] in ("done", "done_with_errors")

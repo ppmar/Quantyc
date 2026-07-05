@@ -562,3 +562,49 @@ def test_review_flagged_study_reval_carries_flag(mock_yahoo, test_db):
     warns = json.loads(test_db.execute(
         "SELECT warnings FROM revaluations WHERE revaluation_id=?", (rid,)).fetchone()[0])
     assert "study_needs_review:post_tax_npv_ge_pre_tax_npv" in warns
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_u3o8_end_to_end(mock_yahoo, test_db):
+    """Uranium study revalues per lb via UX=F. Production stored as raw 3.6 (Mlb
+    mislabel, legacy leg) -> magnitude net scales to 3,600,000 lb."""
+    mock_yahoo.side_effect = lambda s: Decimal("84.25") if s == "UX=F" else (_ for _ in ()).throw(ValueError(s))
+    test_db.execute("UPDATE project_commodities SET commodity = 'U3O8' WHERE project_id = 1")
+    test_db.commit()
+    price_deck = json.dumps([{"commodity": "U3O8", "price": 60.0, "unit": "USD/lb"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date, mine_life_years,
+            annual_production, recovery_pct, post_tax_npv, discount_rate_pct, tax_rate_pct,
+            assumed_price_deck, reporting_currency)
+        VALUES (?, 'DFS', 'definitive', '2025-06-15', 12.0, 3.6, 90.0, 341.0, 8.0, 30.0, ?, 'USD')
+    """, (1, price_deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    rid = revalue_study(test_db, sid)
+    row = test_db.execute("SELECT * FROM revaluations WHERE revaluation_id = ?", (rid,)).fetchone()
+    assert row["commodity"] == "U3O8"
+    assert row["annual_production"] == 3_600_000.0
+    assert row["annual_production_unit"] == "lb"
+    assert row["price_spot"] == 84.25
+    assert row["npv_uplift"] > 0
+    warns = json.loads(row["warnings"])
+    assert any("scaled_U3O8" in w for w in warns)
+
+
+@patch("revaluation.prices.fetch_yahoo_quote")
+def test_revalue_u3o8_ambiguous_band_refused(mock_yahoo, test_db):
+    """A U3O8 figure in the 20-100k band (tonnes? klb?) is refused, never guessed."""
+    mock_yahoo.side_effect = lambda s: Decimal("84.25") if s == "UX=F" else Decimal("0.65")
+    test_db.execute("UPDATE project_commodities SET commodity = 'U3O8' WHERE project_id = 1")
+    test_db.commit()
+    price_deck = json.dumps([{"commodity": "U3O8", "price": 60.0, "unit": "USD/lb"}])
+    test_db.execute("""
+        INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date, mine_life_years,
+            annual_production, recovery_pct, post_tax_npv, discount_rate_pct, tax_rate_pct,
+            assumed_price_deck, reporting_currency)
+        VALUES (?, 'DFS', 'definitive', '2025-06-15', 12.0, 460.0, 90.0, 341.0, 8.0, 30.0, ?, 'USD')
+    """, (1, price_deck))
+    test_db.commit()
+    sid = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    with pytest.raises(RevaluationError, match="u3o8_production_unit_ambiguous"):
+        revalue_study(test_db, sid)

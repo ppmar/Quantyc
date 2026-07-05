@@ -1,5 +1,5 @@
 """
-Yahoo Finance spot price fetcher for Au, Ag, Cu, and AUD/USD FX.
+Yahoo Finance spot price fetcher for Au, Ag, Cu, Pd, Pt, U3O8, and AUD/USD FX.
 
 Uses the unofficial query2.finance.yahoo.com endpoint via requests.
 No yfinance dependency — that library is heavyweight and we only need quotes.
@@ -26,6 +26,9 @@ SYMBOL_MAP = {
     "GC=F":     ("Au", "USD/oz", Decimal("1")),
     "SI=F":     ("Ag", "USD/oz", Decimal("1")),
     "HG=F":     ("Cu", "USD/lb", Decimal("1")),
+    "PA=F":     ("Pd", "USD/oz", Decimal("1")),    # NYMEX palladium
+    "PL=F":     ("Pt", "USD/oz", Decimal("1")),    # NYMEX platinum
+    "UX=F":     ("U3O8", "USD/lb", Decimal("1")),  # NYMEX UxC uranium U3O8 futures
     "AUDUSD=X": ("AUDUSD", "USD_per_AUD", Decimal("1")),
 }
 

@@ -269,7 +269,7 @@ def portfolio_companies():
             if c["latest_study_date"] and c["latest_study_date"] >= study_after
         ]
     if supported_only:
-        _SUPPORTED = {"Au", "Ag", "Cu"}
+        _SUPPORTED = {"Au", "Ag", "Cu", "Pd", "Pt", "U3O8"}
         companies = [
             c for c in companies
             if c["has_dfs_pfs"] and any(cm in _SUPPORTED for cm in c["primary_commodities"])

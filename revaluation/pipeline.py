@@ -78,7 +78,14 @@ def _resolve_leg(conn, study, leg_row, price_deck, get_fx) -> _ResolvedLeg:
     commodity = leg_row["commodity"]
     warnings: list[str] = []
     prod_raw = leg_row["annual_production"]
-    basis_unit = "oz" if commodity in ("Au", "Ag") else "t"
+    # Canonical production label per commodity: troy-oz metals in oz, U3O8 in lb
+    # (its magnitude heuristic resolves legacy mislabels to absolute lb), rest in t.
+    if commodity in ("Au", "Ag", "Pd", "Pt"):
+        basis_unit = "oz"
+    elif commodity == "U3O8":
+        basis_unit = "lb"
+    else:
+        basis_unit = "t"
 
     # DFS price from the deck (per commodity). Decks carry currency+unit verbatim.
     price_dfs = None
@@ -129,7 +136,7 @@ def _resolve_leg(conn, study, leg_row, price_deck, get_fx) -> _ResolvedLeg:
     if prod_scaled is not None and price_dfs is not None:
         if supported:
             norm_prod, _w = normalize_production_to_unit_price_basis(
-                prod_scaled, basis_unit, ("oz" if commodity in ("Au", "Ag") else "lb"), commodity)
+                prod_scaled, basis_unit, ("oz" if commodity in ("Au", "Ag", "Pd", "Pt") else "lb"), commodity)
             dfs_rev = norm_prod * price_dfs
         else:
             dfs_rev = prod_scaled * price_dfs

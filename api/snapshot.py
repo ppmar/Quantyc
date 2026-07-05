@@ -605,7 +605,7 @@ def api_company_snapshot(ticker: str):
                 deck_far_below_spot = (
                     reval_row["price_dfs"] is not None and reval_row["price_spot"] is not None
                     and reval_row["price_dfs"] < reval_row["price_spot"] / 2)
-                price_unit = "USD/oz" if reval_row["commodity"] in ("Au", "Ag") else "USD/lb"
+                price_unit = "USD/oz" if reval_row["commodity"] in ("Au", "Ag", "Pd", "Pt") else "USD/lb"
                 reval_out = {
                     "coverage_pct": coverage_pct,
                     "is_partial_basket": coverage_pct < 100.0,
@@ -698,8 +698,8 @@ def api_company_snapshot(ticker: str):
     )
     has_meaningful_operations = max_completeness >= _TAB_VISIBILITY_THRESHOLD
 
-    # Comparison tab needs a commodity we have a price feed for (Au/Ag/Cu).
-    _FEED_COMMODITIES = {"Au", "Ag", "Cu"}
+    # Comparison tab needs a commodity we have a price feed for.
+    _FEED_COMMODITIES = {"Au", "Ag", "Cu", "Pd", "Pt", "U3O8"}
     has_comparison = any(
         c in _FEED_COMMODITIES for p in projects_data for c in p["commodities"]
     )

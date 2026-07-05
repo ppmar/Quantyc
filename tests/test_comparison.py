@@ -72,6 +72,6 @@ def test_price_comparison_aligns_and_forward_fills(client):
 
 
 def test_price_comparison_rejects_unsupported_commodity(client):
-    resp = client.get("/api/company/WAF/price-comparison?commodity=U3O8&range=1y")
+    resp = client.get("/api/company/WAF/price-comparison?commodity=Li2O&range=1y")
     assert resp.status_code == 400
     assert "unsupported_commodity" in resp.get_json()["error"]

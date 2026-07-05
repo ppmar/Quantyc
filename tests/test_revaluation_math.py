@@ -514,3 +514,59 @@ def test_au_production_just_below_cap_passes():
     from revaluation.math import apply_production_magnitude_heuristic
     val, warn = apply_production_magnitude_heuristic("Au", Decimal("950000"))
     assert val == Decimal("950000") and warn is None
+
+
+# ── New supported commodities: Pd, Pt, U3O8 ───────────────────────
+
+
+def test_u3o8_magnitude_bands():
+    from revaluation.math import apply_production_magnitude_heuristic as h
+    # < 20 -> Mlb, x1e6 (DYL Tumas "3.6")
+    val, warn = h("U3O8", Decimal("3.6"))
+    assert val == Decimal("3600000") and "x1000000" in warn
+    # 20-100k ambiguous (tonnes? klb?) -> refuse (AEE Häggån "460")
+    with pytest.raises(RevaluationError, match="u3o8_production_unit_ambiguous"):
+        h("U3O8", Decimal("460"))
+    # absolute lb passes (BKY "4,400,000")
+    val, warn = h("U3O8", Decimal("4400000"))
+    assert val == Decimal("4400000") and warn is None
+    # > 30 Mlb implausible -> refuse
+    with pytest.raises(RevaluationError, match="u3o8_production_implausible"):
+        h("U3O8", Decimal("50000000"))
+
+
+def test_pd_koz_scaled_and_cap():
+    from revaluation.math import apply_production_magnitude_heuristic as h
+    val, warn = h("Pd", Decimal("197"))
+    assert val == Decimal("197000") and "x1000" in warn
+    val, warn = h("Pd", Decimal("197000"))
+    assert val == Decimal("197000") and warn is None
+    with pytest.raises(RevaluationError, match="pd_production_implausible"):
+        h("Pd", Decimal("2000000"))
+
+
+def test_u3o8_leg_revalues_per_lb():
+    """U3O8 basket leg: 3.6 Mlb/yr, deck $60/lb, spot $84.25/lb, USD reporting.
+    ΔRev = 3,600,000 * 24.25 = 87,300,000 USD/yr
+    A(8%, 12) = 7.5361 ; x0.70 -> ΔNPV = 460.53 USD M ; NPV_spot = 341 + 460.53"""
+    result = revalue_basket(BasketRevaluationInput(
+        legs=(CommodityLeg("U3O8", Decimal("60"), Decimal("84.25"),
+                           Decimal("3600000"), "lb"),),
+        mine_life_years=Decimal("12"), discount_rate_pct=Decimal("8.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("341"),
+        reporting_currency="USD", fx_rate=None,
+    ))
+    assert abs(result.delta_revenue_annual_usd - Decimal("87300000")) < Decimal("1")
+    assert abs(result.npv_spot - Decimal("801.53")) < Decimal("2.0")
+
+
+def test_pd_leg_uses_oz_basis():
+    result = revalue_basket(BasketRevaluationInput(
+        legs=(CommodityLeg("Pd", Decimal("1300"), Decimal("1272.5"),
+                           Decimal("197000"), "oz"),),
+        mine_life_years=Decimal("10"), discount_rate_pct=Decimal("8.0"),
+        tax_rate_pct=Decimal("30.0"), npv_dfs=Decimal("1000"),
+        reporting_currency="USD", fx_rate=None,
+    ))
+    # negative delta (spot below deck) — sign flows through
+    assert result.npv_uplift < 0

@@ -19,7 +19,7 @@ from revaluation.prices import fetch_yahoo_history, PriceFetchError
 bp = Blueprint("comparison", __name__)
 
 # Commodity -> Yahoo futures symbol. Only those with a feed are chartable.
-_COMMODITY_SYMBOL = {"Au": "GC=F", "Ag": "SI=F", "Cu": "HG=F"}
+_COMMODITY_SYMBOL = {"Au": "GC=F", "Ag": "SI=F", "Cu": "HG=F", "Pd": "PA=F", "Pt": "PL=F", "U3O8": "UX=F"}
 
 # range -> (seconds back from now, interval). Weekly bars for long windows.
 _DAY = 86400

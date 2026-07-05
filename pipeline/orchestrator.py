@@ -300,6 +300,7 @@ def header_stage_tier(header: str | None) -> str | None:
 _PROD_UNIT_MULT = {
     "oz": 1, "ozs": 1, "koz": 1_000, "kozs": 1_000, "moz": 1_000_000,
     "t": 1, "tonnes": 1, "tonne": 1, "kt": 1_000, "ktpa": 1_000, "mt": 1_000_000, "mtpa": 1_000_000,
+    "lb": 1, "lbs": 1, "klb": 1_000, "klbs": 1_000, "mlb": 1_000_000, "mlbs": 1_000_000, "mlbpa": 1_000_000,
 }
 
 
@@ -340,7 +341,11 @@ def _persist_study_commodities(conn, study_id, result, primary_prod_norm):
     primary leg from the scalar fields — mirrors the 0015 backfill so a NEW single-metal
     study is shaped identically to a migrated one (PR4 guarantees ≥1 leg)."""
     def _base_unit(commodity):
-        return "oz" if commodity in ("Au", "Ag") else "t"
+        if commodity in ("Au", "Ag", "Pd", "Pt"):
+            return "oz"
+        if commodity == "U3O8":
+            return "lb"
+        return "t"
 
     legs = list(result.commodity_production or [])
     if legs:

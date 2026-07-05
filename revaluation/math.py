@@ -15,10 +15,11 @@ DEFAULT_TAX_RATE = Decimal("0.30")
 # stale deck far from spot) rather than real leverage — flag it, don't trust it.
 EXTREME_UPLIFT_RATIO = Decimal("5")
 
-SUPPORTED_COMMODITIES = {"Au", "Ag", "Cu"}
+SUPPORTED_COMMODITIES = {"Au", "Ag", "Cu", "Pd", "Pt", "U3O8"}
 
 # Commodities priced and produced per troy ounce (no unit conversion needed).
-_OZ_COMMODITIES = {"Au", "Ag"}
+_OZ_COMMODITIES = {"Au", "Ag", "Pd", "Pt"}
+# U3O8 is priced per lb (UX=F); production quoted in Mlb / lb / occasionally tonnes.
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,35 @@ def apply_production_magnitude_heuristic(
         if annual_production < 1000:
             raise RevaluationError(
                 f"ag_production_unit_ambiguous:{annual_production}_koz_or_moz"
+            )
+    # Pd/Pt behave like Au: per-oz metals, no PGM project below 1,000 oz/yr, none
+    # above 1 Moz/yr in this universe (Gonneville PFS is ~200 koz Pd).
+    if commodity in ("Pd", "Pt"):
+        if annual_production > 1_000_000:
+            raise RevaluationError(
+                f"{commodity.lower()}_production_implausible_check_lom:{annual_production}oz_per_year"
+            )
+        if annual_production < 1000:
+            scaled = annual_production * 1000
+            return scaled, f"production_magnitude_scaled_{commodity}_{annual_production}_x1000"
+    # U3O8 (basis lb): studies quote Mlb/yr (DYL Tumas 3.6), absolute lb (BKY
+    # 4,400,000), or tonnes (rare, European). Legacy legs carry no trustworthy unit,
+    # so decide by magnitude:
+    #   < 20            -> Mlb mislabelled absolute, x1e6 (no mine produces < 20 of anything/yr)
+    #   20 - 100,000    -> ambiguous (tonnes? klb?) -> refuse, never guess
+    #   100,000 - 30e6  -> absolute lb (largest western mines ~18 Mlb/yr)
+    #   > 30e6          -> implausible -> refuse
+    if commodity == "U3O8":
+        if annual_production < 20:
+            scaled = annual_production * 1_000_000
+            return scaled, f"production_magnitude_scaled_U3O8_{annual_production}_x1000000"
+        if annual_production < 100_000:
+            raise RevaluationError(
+                f"u3o8_production_unit_ambiguous:{annual_production}_t_or_klb"
+            )
+        if annual_production > 30_000_000:
+            raise RevaluationError(
+                f"u3o8_production_implausible:{annual_production}lb_per_year"
             )
     if commodity == "Cu" and annual_production < 100:
         scaled = annual_production * 1000
@@ -252,6 +282,16 @@ def normalize_production_to_unit_price_basis(
             raise RevaluationError(
                 f"Cu production must be in 't' or 'lb', got '{production_unit}'"
             )
+    elif commodity == "U3O8":
+        # Priced per lb (UX=F). Legacy legs are labelled 't' regardless of the real
+        # basis; the magnitude heuristic has already resolved the value to absolute lb,
+        # so both labels pass through as lb here. A true tonnes figure lands in the
+        # 20-100k ambiguous band and is refused upstream before reaching this point.
+        if production_unit in ("lb", "t"):
+            return annual_production, warnings
+        raise RevaluationError(
+            f"U3O8 production must be in 'lb' or 't', got '{production_unit}'"
+        )
     else:
         raise RevaluationError(f"unsupported_commodity:{commodity}")
 

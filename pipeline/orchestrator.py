@@ -347,7 +347,13 @@ def _persist_study_commodities(conn, study_id, result, primary_prod_norm):
             return "lb"
         return "t"
 
-    legs = list(result.commodity_production or [])
+    def _valid_commodity(x):
+        # The LLM occasionally returns the literal string "null" for a commodity
+        # outside its enum (NEW Lochinvar coking coal). A leg without a real
+        # commodity code is unusable — skip it rather than persist junk.
+        return bool(x) and x.strip().lower() not in ("null", "none", "n/a")
+
+    legs = [cp for cp in (result.commodity_production or []) if _valid_commodity(cp.commodity)]
     if legs:
         for cp in legs:
             is_primary = 1 if cp.commodity == result.primary_commodity else 0
@@ -363,7 +369,7 @@ def _persist_study_commodities(conn, study_id, result, primary_prod_norm):
                 (study_id, cp.commodity, val, _base_unit(cp.commodity),
                  float(cp.recovery_pct) if cp.recovery_pct is not None else None, is_primary),
             )
-    else:
+    elif _valid_commodity(result.primary_commodity):
         conn.execute(
             "INSERT INTO study_commodities (study_id, commodity, annual_production, "
             "annual_production_unit, recovery_pct, is_primary) VALUES (?, ?, ?, ?, ?, 1)",

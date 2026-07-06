@@ -69,3 +69,19 @@ def test_ingest_runs_reval_refresh_non_fatal():
         app_module._run_ingest(["DEG"], 20)
     mock_rf.assert_called_once()
     assert app_module.pipeline_status["phase"] in ("done", "done_with_errors")
+
+
+def test_ingest_lock_exclusive(tmp_path):
+    """The 08:00 cron fires in every gunicorn worker at once; the volume lockfile
+    must let exactly one through. Stale locks (crashed worker) expire."""
+    lock = tmp_path / "ingest.lock"
+    with patch.object(app_module, "_INGEST_LOCK", lock):
+        assert app_module._acquire_ingest_lock() is True
+        assert app_module._acquire_ingest_lock() is False   # second worker blocked
+        app_module._release_ingest_lock()
+        assert app_module._acquire_ingest_lock() is True    # reacquirable after release
+        # stale lock: backdate mtime past the 2h threshold -> steal it
+        import os as _os, time as _time
+        _os.utime(lock, (_time.time() - 3 * 3600, _time.time() - 3 * 3600))
+        assert app_module._acquire_ingest_lock() is True
+        app_module._release_ingest_lock()

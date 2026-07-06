@@ -307,10 +307,41 @@ def api_sync():
 # Scheduled auto-ingest
 # ---------------------------------------------------------------------------
 
-SCHEDULE_INTERVAL_HOURS = int(os.environ.get("INGEST_INTERVAL_HOURS", "24"))
+# Daily fetch at a fixed local hour (default 08:00 Europe/Paris — the full ASX day
+# has closed and announcements are out by then). Was interval-based (24h from boot),
+# which drifted with every redeploy.
 SCHEDULE_ENABLED = os.environ.get("INGEST_SCHEDULE", "1") == "1"
+INGEST_CRON_HOUR = int(os.environ.get("INGEST_CRON_HOUR", "8"))
+INGEST_TZ = os.environ.get("INGEST_TZ", "Europe/Paris")
 
 scheduler = BackgroundScheduler(daemon=True)
+
+# Gunicorn runs multiple workers, each with its own scheduler — a fixed-time cron
+# fires in ALL of them simultaneously (the old interval mode was only saved by boot
+# stagger). Cross-process guard: an exclusive lockfile on the shared volume; stale
+# locks (crashed worker) expire after 2h.
+_INGEST_LOCK = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "/tmp")) / "ingest.lock"
+_INGEST_LOCK_STALE_S = 2 * 3600
+
+
+def _acquire_ingest_lock() -> bool:
+    try:
+        fd = os.open(str(_INGEST_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            if time.time() - _INGEST_LOCK.stat().st_mtime > _INGEST_LOCK_STALE_S:
+                _INGEST_LOCK.unlink(missing_ok=True)
+                return _acquire_ingest_lock()
+        except OSError:
+            pass
+        return False
+
+
+def _release_ingest_lock() -> None:
+    _INGEST_LOCK.unlink(missing_ok=True)
 
 
 def _load_pilot_tickers() -> list[str]:
@@ -324,28 +355,47 @@ def _load_pilot_tickers() -> list[str]:
 
 
 def _scheduled_ingest():
-    """Called by APScheduler on interval."""
+    """Called by APScheduler daily at INGEST_CRON_HOUR (INGEST_TZ)."""
     if pipeline_status.get("running"):
         logger.info("Scheduled ingest skipped — pipeline already running")
         return
-    tickers = _load_pilot_tickers()
-    if not tickers:
-        logger.warning("Scheduled ingest skipped — no tickers in pilot_tickers.txt")
+    if not _acquire_ingest_lock():
+        logger.info("Scheduled ingest skipped — another worker holds the lock")
         return
-    logger.info("Scheduled ingest starting for %d tickers", len(tickers))
-    _start_ingest(tickers, 20)
+    try:
+        tickers = _load_pilot_tickers()
+        if not tickers:
+            logger.warning("Scheduled ingest skipped — no tickers in pilot_tickers.txt")
+            return
+        logger.info("Scheduled ingest starting for %d tickers", len(tickers))
+        _start_ingest(tickers, 20)
+    finally:
+        # _run_ingest runs in its own thread; hold the lock only for the takeoff
+        # window (the double-fire we guard against is the simultaneous 08:00 cron).
+        # Release after a grace delay so the other worker's cron tick has passed.
+        def _delayed_release():
+            time.sleep(120)
+            _release_ingest_lock()
+        threading.Thread(target=_delayed_release, daemon=True).start()
+
+
+def _add_ingest_job():
+    scheduler.add_job(
+        _scheduled_ingest,
+        "cron",
+        hour=INGEST_CRON_HOUR,
+        minute=0,
+        timezone=INGEST_TZ,
+        id="auto_ingest",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
 
 
 if SCHEDULE_ENABLED:
-    scheduler.add_job(
-        _scheduled_ingest,
-        "interval",
-        hours=SCHEDULE_INTERVAL_HOURS,
-        id="auto_ingest",
-        replace_existing=True,
-    )
+    _add_ingest_job()
     scheduler.start()
-    logger.info("Auto-ingest scheduled every %dh", SCHEDULE_INTERVAL_HOURS)
+    logger.info("Auto-ingest scheduled daily at %02d:00 %s", INGEST_CRON_HOUR, INGEST_TZ)
 
 
 @app.route("/api/schedule")
@@ -354,7 +404,8 @@ def api_schedule():
     job = scheduler.get_job("auto_ingest")
     return jsonify({
         "enabled": job is not None,
-        "interval_hours": SCHEDULE_INTERVAL_HOURS,
+        "daily_at": f"{INGEST_CRON_HOUR:02d}:00",
+        "timezone": INGEST_TZ,
         "next_run": str(job.next_run_time) if job else None,
         "tickers": _load_pilot_tickers(),
     })
@@ -368,14 +419,9 @@ def api_schedule_toggle():
         scheduler.remove_job("auto_ingest")
         return jsonify({"enabled": False})
     else:
-        scheduler.add_job(
-            _scheduled_ingest,
-            "interval",
-            hours=SCHEDULE_INTERVAL_HOURS,
-            id="auto_ingest",
-            replace_existing=True,
-        )
-        return jsonify({"enabled": True, "interval_hours": SCHEDULE_INTERVAL_HOURS})
+        _add_ingest_job()
+        return jsonify({"enabled": True, "daily_at": f"{INGEST_CRON_HOUR:02d}:00",
+                        "timezone": INGEST_TZ})
 
 
 @app.route("/api/schedule/run", methods=["POST"])

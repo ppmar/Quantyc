@@ -110,19 +110,58 @@ function formatStudy(stage: string | null, date: string | null): string {
   return `${stage} · ${month} ${d.getFullYear()}`;
 }
 
-function UpliftCell({ pct, bar = false }: { pct: number; bar?: boolean }) {
-  const cls =
-    pct > 1 ? "text-green-400" : pct < -0.1 ? "text-red-400" : "text-zinc-400";
+// Mirrors _STALE_STUDY_YEARS = 3.0 (api/portfolio.py:30). Keep in sync.
+const AGE_FRESH_Y = 1.5;
+const AGE_STALE_Y = 3.0;
+
+function studyAgeYears(date: string | null): number | null {
+  if (!date) return null;
+  const t = Date.parse(date);
+  return Number.isNaN(t) ? null : (Date.now() - t) / (365.25 * 24 * 3600 * 1000);
+}
+
+function StudyCell({ stage, date }: { stage: string | null; date: string | null }) {
+  const age = studyAgeYears(date);
+  const dot =
+    age == null ? null
+    : age <= AGE_FRESH_Y ? "bg-emerald-400/80"
+    : age <= AGE_STALE_Y ? "bg-amber-400/80"
+    : "bg-red-400/80";
+  return (
+    <span className="inline-flex items-center gap-2">
+      {formatStudy(stage, date)}
+      {dot && (
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${dot}`}
+          title={`Study age: ${age!.toFixed(1)}y${age! > AGE_STALE_Y ? " — stale" : ""}`}
+        />
+      )}
+    </span>
+  );
+}
+
+function SignalChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-zinc-400">
+      {children}
+    </span>
+  );
+}
+
+function UpliftCell({ pct, bar = false, muted = false }:
+  { pct: number; bar?: boolean; muted?: boolean }) {
+  const cls = muted ? "text-zinc-400"
+    : pct > 1 ? "text-green-400" : pct < -0.1 ? "text-red-400" : "text-zinc-400";
   // Heat strip: |pct| clamped to 150% maps to bar width.
   const width = Math.min(Math.abs(pct), 1.5) / 1.5;
+  const fill = muted ? "bg-zinc-500/50"
+    : pct >= 0 ? "bg-emerald-400/70" : "bg-red-400/70";
   return (
     <span className="inline-flex items-center justify-end gap-2">
       {bar && (
         <span className="relative inline-block h-[5px] w-12 overflow-hidden rounded-full bg-white/[0.05]">
           <span
-            className={`absolute inset-y-0 rounded-full ${
-              pct >= 0 ? "right-0 bg-emerald-400/70" : "right-0 bg-red-400/70"
-            }`}
+            className={`absolute inset-y-0 right-0 rounded-full ${fill}`}
             style={{ width: `${Math.max(width * 100, 4)}%` }}
           />
         </span>
@@ -277,13 +316,20 @@ function ExpandedRow({ ticker }: { ticker: string }) {
           </td>
           <td className="px-3 py-1.5 text-[12px] text-zinc-500">
             {p.latest_study
-              ? formatStudy(p.latest_study.study_stage, p.latest_study.study_date)
+              ? <StudyCell stage={p.latest_study.study_stage} date={p.latest_study.study_date} />
               : "—"}
           </td>
           <td className="px-3 py-1.5 text-[12px] text-right">
             {p.latest_revaluation ? (
-              <span>
-                <UpliftCell pct={p.latest_revaluation.npv_uplift_pct} />
+              <span className="inline-flex items-center gap-1.5">
+                <UpliftCell
+                  pct={p.latest_revaluation.npv_uplift_pct}
+                  muted={!!(p.latest_revaluation.low_base || p.latest_revaluation.is_stale_study)}
+                />
+                {p.latest_revaluation.low_base && <SignalChip>low base</SignalChip>}
+                {p.latest_revaluation.is_stale_study && (
+                  <SignalChip>stale · {Math.round(p.latest_revaluation.study_age_years ?? 0)}y</SignalChip>
+                )}
                 <span className="text-zinc-600 ml-1.5 font-mono">
                   spot ${p.latest_revaluation.npv_spot.toFixed(0)}M
                 </span>
@@ -717,14 +763,21 @@ function CompaniesPageInner() {
                       {formatSites(c) || "—"}
                     </td>
                     <td className="px-3 py-2 text-[13px] text-zinc-500">
-                      {formatStudy(c.latest_study_stage, c.latest_study_date)}
+                      <StudyCell stage={c.latest_study_stage} date={c.latest_study_date} />
                     </td>
                     <td className="px-3 py-2 text-[13px] text-right">
                       {c.latest_revaluation ? (
-                        <UpliftCell
-                          pct={c.latest_revaluation.npv_uplift_pct}
-                          bar
-                        />
+                        <span className="inline-flex items-center gap-1.5">
+                          <UpliftCell
+                            pct={c.latest_revaluation.npv_uplift_pct}
+                            bar
+                            muted={!!(c.latest_revaluation.low_base || c.latest_revaluation.is_stale_study)}
+                          />
+                          {c.latest_revaluation.low_base && <SignalChip>low base</SignalChip>}
+                          {c.latest_revaluation.is_stale_study && (
+                            <SignalChip>stale · {Math.round(c.latest_revaluation.study_age_years ?? 0)}y</SignalChip>
+                          )}
+                        </span>
                       ) : (
                         <span className="text-zinc-700">—</span>
                       )}

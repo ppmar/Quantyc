@@ -130,6 +130,14 @@ export interface PortfolioCompany {
     npv_uplift_pct: number;
     commodity: string;
     price_spot: number;
+    low_base: boolean;
+    is_stale_study: boolean;
+    study_age_years: number | null;
+    deck_far_below_spot: boolean;
+    coverage_pct: number;
+    is_partial_basket: boolean;
+    study_needs_review: boolean;
+    study_review_reason: string | null;
   } | null;
 }
 
@@ -186,6 +194,9 @@ export interface PortfolioProject {
     computed_at: string;
     method_version: string | null;
     study_confidence_tier: string | null;
+    low_base: boolean;
+    is_stale_study: boolean;
+    study_age_years: number | null;
   } | null;
   document_counts: {
     studies: number;

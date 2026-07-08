@@ -82,6 +82,7 @@ def portfolio_companies():
         latest_study AS (
             SELECT s.project_id,
                    s.study_stage,
+                   s.study_confidence_tier,
                    COALESCE(s.study_date, d.announcement_date) AS effective_date,
                    ROW_NUMBER() OVER (
                        PARTITION BY s.project_id
@@ -89,6 +90,24 @@ def portfolio_companies():
                    ) AS rn
             FROM studies s
             LEFT JOIN documents d ON d.document_id = s.document_id
+        ),
+        company_latest_study AS (
+            -- The company row's stage and date must come from the SAME study (the
+            -- most recent across its projects; ties: definitive > indicative > other).
+            -- Two independent MAX() aggregates could pair "PFS" (alphabetical max)
+            -- with another study's date (I3).
+            SELECT p.company_id, ls.study_stage, ls.effective_date,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY p.company_id
+                       ORDER BY ls.effective_date DESC,
+                                CASE ls.study_confidence_tier
+                                     WHEN 'definitive' THEN 0
+                                     WHEN 'indicative' THEN 1
+                                     ELSE 2 END
+                   ) AS crn
+            FROM latest_study ls
+            JOIN projects p ON p.project_id = ls.project_id
+            WHERE ls.rn = 1
         )
         SELECT c.ticker,
                c.name AS company_name,
@@ -98,8 +117,8 @@ def portfolio_companies():
                GROUP_CONCAT(DISTINCT ap.country) AS countries_csv,
                GROUP_CONCAT(DISTINCT ap.state) AS states_csv,
                GROUP_CONCAT(DISTINCT ap.region) AS regions_csv,
-               MAX(CASE WHEN ls.rn = 1 THEN ls.effective_date END) AS latest_study_date,
-               MAX(CASE WHEN ls.rn = 1 THEN ls.study_stage END) AS latest_study_stage,
+               MAX(cls.effective_date) AS latest_study_date,
+               MAX(cls.study_stage) AS latest_study_stage,
                EXISTS (
                    SELECT 1 FROM studies st
                    JOIN projects pp ON pp.project_id = st.project_id
@@ -114,7 +133,8 @@ def portfolio_companies():
                ) AS study_project_count
         FROM companies c
         LEFT JOIN active_projects ap ON ap.company_id = c.company_id
-        LEFT JOIN latest_study ls ON ls.project_id = ap.project_id AND ls.rn = 1
+        LEFT JOIN company_latest_study cls
+               ON cls.company_id = c.company_id AND cls.crn = 1
         GROUP BY c.company_id
         HAVING active_project_count > 0
         ORDER BY c.ticker
@@ -292,14 +312,17 @@ def portfolio_companies():
     elif sort_key == "ticker":
         companies.sort(key=lambda c: c["ticker"])
     elif sort_key == "uplift_abs_desc":
-        # Best signal: rank by absolute uplift, not %.
-        companies.sort(key=lambda c: -(_reval_field(c, "npv_uplift_abs") or float("-inf")))
+        # Best signal: rank by absolute uplift, not %. `is not None` — 0.0 is a real value.
+        def _abs_key(c):
+            v = _reval_field(c, "npv_uplift_abs")
+            return -v if v is not None else float("inf")
+        companies.sort(key=_abs_key)
     elif sort_key == "uplift_pct_desc":
-        # Rank by %, but low-base companies sink below full-base ones (I6).
-        companies.sort(key=lambda c: (
-            0 if not _reval_field(c, "low_base") else 1,
-            -(_reval_field(c, "npv_uplift_pct") or float("-inf")),
-        ))
+        # Pure % sort. Signal quality is carried visually (age dot + chips), not by rank.
+        def _pct_key(c):
+            pct = _reval_field(c, "npv_uplift_pct")
+            return -pct if pct is not None else float("inf")   # no-reval last; 0.0 is a real value
+        companies.sort(key=_pct_key)
 
     total = len(companies)
     companies = companies[:limit]
@@ -407,7 +430,7 @@ def portfolio_company_detail(ticker: str):
         latest_reval = _query_one("""
             SELECT r.commodity, r.price_dfs, r.price_spot, r.npv_dfs, r.npv_spot,
                    r.npv_uplift_pct, r.computed_at, r.method_version,
-                   r.study_confidence_tier
+                   r.study_confidence_tier, s.study_date AS reval_study_date
             FROM revaluations r
             LEFT JOIN studies s ON s.study_id = r.study_id
             WHERE r.project_id = ?
@@ -417,6 +440,22 @@ def portfolio_company_detail(ticker: str):
                      r.computed_at DESC
             LIMIT 1
         """, (pid,))
+        if latest_reval:
+            # Same read-time weak-signal fields as the list (I5: list and detail
+            # render weak signals identically, so both need the same inputs).
+            age = None
+            if latest_reval.get("reval_study_date"):
+                try:
+                    age = round(
+                        (datetime.now(timezone.utc).date()
+                         - datetime.strptime(latest_reval["reval_study_date"][:10], "%Y-%m-%d").date()).days
+                        / 365.25, 1)
+                except ValueError:
+                    pass
+            latest_reval["study_age_years"] = age
+            latest_reval["is_stale_study"] = age is not None and age > _STALE_STUDY_YEARS
+            latest_reval["low_base"] = (latest_reval["npv_dfs"] is not None
+                                        and latest_reval["npv_dfs"] < _LOW_BASE_NPV_M)
 
         # Stage confidence from latest inference
         stage_confidence = None

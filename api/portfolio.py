@@ -120,7 +120,10 @@ def portfolio_companies():
         ORDER BY c.ticker
     """)
 
-    # Primary commodities per company
+    # Primary commodities per company — ACTIVE projects only (same filter as the
+    # active_projects CTE above). Inactive projects aren't displayed, so their
+    # commodities must not tag the company (a dormant lithium tenement was tagging
+    # gold producers with Li).
     commodity_map: dict[str, list[str]] = {}
     commodity_rows = _query_db("""
         SELECT c.ticker, pc.commodity
@@ -128,6 +131,8 @@ def portfolio_companies():
         JOIN projects p ON p.project_id = pc.project_id
         JOIN companies c ON c.company_id = p.company_id
         WHERE pc.is_primary = 1
+          AND (EXISTS (SELECT 1 FROM studies WHERE project_id = p.project_id)
+               OR EXISTS (SELECT 1 FROM resources WHERE project_id = p.project_id))
     """)
     for r in commodity_rows:
         comms = commodity_map.setdefault(r["ticker"], [])

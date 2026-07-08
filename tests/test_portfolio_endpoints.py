@@ -206,3 +206,24 @@ class TestDetailRevalSelection:
         rv = proj["latest_revaluation"]
         # 2016 PFS reval (11.204) must win over the later-written 2014 DFS row (13.219).
         assert rv["npv_uplift_pct"] == 11.204
+
+
+class TestCommodityTags:
+    def test_inactive_project_commodity_not_tagged(self, client):
+        """Company tags must reflect only DISPLAYED (active) projects. A dormant
+        tenement with no study/resource must not add its commodity to the tags."""
+        import api.portfolio as _pf
+        conn = _pf.get_connection()
+        cid = conn.execute("SELECT company_id FROM companies WHERE ticker='DEG'").fetchone()[0]
+        # Inactive project: no study, no resource — the UI doesn't display it.
+        pid = conn.execute(
+            "INSERT INTO projects (company_id, project_name, country, created_at) "
+            "VALUES (?, 'Dormant Lithium Tenement', 'Australia', '2020-01-01')", (cid,)).lastrowid
+        conn.execute(
+            "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, 'Li2O', 1)",
+            (pid,))
+        conn.commit()
+
+        data = client.get("/api/portfolio/companies").get_json()
+        deg = next(c for c in data["companies"] if c["ticker"] == "DEG")
+        assert "Li2O" not in deg["primary_commodities"]

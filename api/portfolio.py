@@ -395,14 +395,21 @@ def portfolio_company_detail(ticker: str):
                 (SELECT COUNT(*) FROM documents WHERE ticker = ?) AS all_documents
         """, (pid, pid, ticker))
 
-        # Latest revaluation
+        # Latest revaluation — of the project's latest REVALUABLE study (most-recent
+        # definitive/indicative that has reval rows), NOT whichever row was written
+        # last (RMX: the 2014 DFS row landed microseconds after the 2016 PFS row and
+        # won on computed_at — the same PDI bug, on the detail route).
         latest_reval = _query_one("""
-            SELECT commodity, price_dfs, price_spot, npv_dfs, npv_spot,
-                   npv_uplift_pct, computed_at, method_version,
-                   study_confidence_tier
-            FROM revaluations
-            WHERE project_id = ?
-            ORDER BY computed_at DESC
+            SELECT r.commodity, r.price_dfs, r.price_spot, r.npv_dfs, r.npv_spot,
+                   r.npv_uplift_pct, r.computed_at, r.method_version,
+                   r.study_confidence_tier
+            FROM revaluations r
+            LEFT JOIN studies s ON s.study_id = r.study_id
+            WHERE r.project_id = ?
+            ORDER BY CASE WHEN s.study_confidence_tier IN ('definitive', 'indicative')
+                          THEN 0 ELSE 1 END,
+                     COALESCE(s.study_date, '') DESC,
+                     r.computed_at DESC
             LIMIT 1
         """, (pid,))
 

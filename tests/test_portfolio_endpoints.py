@@ -162,3 +162,47 @@ class TestPortfolioCompanyDetail:
         assert hemi is not None
         assert hemi["stage_confidence"] == "high"
         assert hemi["stage_source"] == "gemini_inferred"
+
+
+class TestDetailRevalSelection:
+    def test_detail_uses_latest_revaluable_study_not_newest_write(self, client):
+        """RMX bug: companies list showed the 2016 PFS reval (+1120%) but the detail
+        route showed the 2014 DFS reval (+1322%) because its row was written last.
+        The detail route must rank by latest revaluable study, not computed_at."""
+        import api.portfolio as _pf
+        conn = _pf.get_connection()  # patched by the client fixture -> the seeded tmp DB
+        pid = conn.execute(
+            "SELECT project_id FROM projects p JOIN companies c ON c.company_id=p.company_id "
+            "WHERE c.ticker='DEG' LIMIT 1").fetchone()[0]
+        cid = conn.execute(
+            "SELECT company_id FROM companies WHERE ticker='DEG'").fetchone()[0]
+        # Newer PFS (2016, npv 25) and older DFS (2014, npv 17.6); DFS reval written LAST.
+        pfs = conn.execute(
+            "INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date, "
+            "post_tax_npv, reporting_currency) VALUES (?, 'PFS', 'indicative', '2016-06-14', 25.0, 'AUD')",
+            (pid,)).lastrowid
+        dfs = conn.execute(
+            "INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date, "
+            "post_tax_npv, reporting_currency) VALUES (?, 'DFS', 'definitive', '2014-11-19', 17.6, 'AUD')",
+            (pid,)).lastrowid
+        conn.execute(
+            "INSERT INTO revaluations (study_id, project_id, company_id, computed_at, commodity, "
+            "price_dfs, price_spot, price_spot_id, annual_production, annual_production_unit, "
+            "mine_life_years, discount_rate_pct, tax_rate_pct, annuity_factor, npv_dfs, npv_spot, "
+            "npv_uplift, npv_uplift_pct, method_version) VALUES "
+            "(?, ?, ?, '2026-06-12T06:54:51.900000', 'Au', 1200, 4198, 1, 30000, 'oz', 8, 5, 30, "
+            "6.5, 25.0, 305.1, 280.1, 11.204, 'first_order_v3')", (pfs, pid, cid))
+        conn.execute(
+            "INSERT INTO revaluations (study_id, project_id, company_id, computed_at, commodity, "
+            "price_dfs, price_spot, price_spot_id, annual_production, annual_production_unit, "
+            "mine_life_years, discount_rate_pct, tax_rate_pct, annuity_factor, npv_dfs, npv_spot, "
+            "npv_uplift, npv_uplift_pct, method_version) VALUES "
+            "(?, ?, ?, '2026-06-12T06:54:51.910000', 'Au', 900, 4198, 1, 20000, 'oz', 6, 5, 30, "
+            "5.1, 17.6, 250.3, 232.7, 13.219, 'first_order_v3')", (dfs, pid, cid))
+        conn.commit()
+
+        data = client.get("/api/portfolio/companies/DEG").get_json()
+        proj = next(p for p in data["projects"] if p["latest_revaluation"])
+        rv = proj["latest_revaluation"]
+        # 2016 PFS reval (11.204) must win over the later-written 2014 DFS row (13.219).
+        assert rv["npv_uplift_pct"] == 11.204

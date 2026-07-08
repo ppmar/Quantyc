@@ -97,3 +97,4 @@ def test_list_uses_latest_revaluable_study_not_newest_write(client):
     # DFS (2025, base 1637) → 172%, NOT the superseded PFS (base 668) → 599%.
     assert rv["npv_uplift_pct"] == pytest.approx(1.7179)
     assert rv["npv_dfs"] == 1637
+

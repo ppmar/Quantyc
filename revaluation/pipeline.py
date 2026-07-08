@@ -434,9 +434,12 @@ def refresh_stale_revaluations(conn: sqlite3.Connection, max_age_hours: float = 
                                     COALESCE(s.study_date, '') DESC
                        ) AS rn
                 FROM studies s
-                WHERE s.study_confidence_tier IN ('definitive', 'indicative')
+                WHERE (s.study_confidence_tier IN ('definitive', 'indicative')
                    OR (s.study_confidence_tier IS NULL AND s.study_stage IN
-                       ('DFS', 'Updated DFS', 'Revised DFS', 'FFS', 'PFS', 'Updated PFS'))
+                       ('DFS', 'Updated DFS', 'Revised DFS', 'FFS', 'PFS', 'Updated PFS')))
+                  -- rank only studies that have reval rows: an npv-less newer study
+                  -- (RMX) must not block the project's revalued study from refreshing
+                  AND s.study_id IN (SELECT DISTINCT study_id FROM revaluations)
             ) WHERE rn = 1
         )
         SELECT r.study_id, MAX(r.computed_at) AS last_computed

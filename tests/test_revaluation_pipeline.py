@@ -639,25 +639,27 @@ def test_refresh_recomputes_stale_reval(mock_yahoo, test_db):
 
 
 @patch("revaluation.prices.fetch_yahoo_quote")
-def test_refresh_skips_superseded_study(mock_yahoo, test_db):
-    """A superseded (older) study's reval is never refreshed — only the project's
-    latest revaluable study stays current; history doesn't churn."""
+def test_refresh_ranks_among_revalued_studies_only(mock_yahoo, test_db):
+    """A newer study WITHOUT reval rows (npv-less, or auto-reval failed) must not
+    block the project from the daily refresh (RMX: an npv-less 2016 PFS blocked the
+    revalued studies entirely). The screen selects among reval rows, so refresh must
+    keep the same study current."""
     from revaluation.pipeline import refresh_stale_revaluations
     mock_yahoo.side_effect = lambda s: {"GC=F": Decimal("4000"), "AUDUSD=X": Decimal("0.6452")}[s]
-    old_sid = _insert_gold_dfs(test_db)                       # 2024-06-15
+    old_sid = _insert_gold_dfs(test_db)                       # 2024-06-15, revalued
     rid = revalue_study(test_db, old_sid)
     test_db.execute("UPDATE revaluations SET computed_at='2026-06-12T00:00:00+00:00' WHERE revaluation_id=?", (rid,))
-    # Newer DFS supersedes it (no reval yet — refresh must not touch either:
-    # the newer one has no reval row, the older one is superseded).
+    # Newer study with NO reval rows (npv NULL -> never revaluable).
     test_db.execute("""
         INSERT INTO studies (project_id, study_stage, study_confidence_tier, study_date,
             mine_life_years, annual_production, recovery_pct, post_tax_npv, discount_rate_pct,
             tax_rate_pct, assumed_price_deck, reporting_currency)
-        VALUES (1,'DFS','definitive','2025-10-01',10.0,150000.0,90.0,900.0,5.0,30.0,
+        VALUES (1,'PFS','indicative','2025-10-01',10.0,150000.0,90.0,NULL,5.0,30.0,
                 '[{"commodity":"Au","price":2500,"unit":"USD/oz"}]','AUD')
     """)
+    test_db.execute("UPDATE commodity_prices SET fetched_at='2026-06-12T00:00:00+00:00'")
     test_db.commit()
     stats = refresh_stale_revaluations(test_db)
-    assert stats["refreshed"] == 0
+    assert stats["refreshed"] == 1  # the revalued study stays current
     n = test_db.execute("SELECT COUNT(*) FROM revaluations WHERE study_id=?", (old_sid,)).fetchone()[0]
-    assert n == 1  # superseded study untouched
+    assert n == 2

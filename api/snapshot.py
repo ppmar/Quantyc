@@ -527,6 +527,9 @@ def api_company_snapshot(ticker: str):
                        FROM studies
                        WHERE project_id = ?
                          AND study_confidence_tier IN ('definitive', 'indicative')
+                         -- must actually have reval rows: an npv-less newer study
+                         -- (RMX 2016-06-21 PFS) must not blank the project's reval
+                         AND study_id IN (SELECT DISTINCT study_id FROM revaluations)
                        ORDER BY CASE WHEN study_date IS NULL OR study_date <= date('now')
                                      THEN 0 ELSE 1 END,
                                 study_date DESC

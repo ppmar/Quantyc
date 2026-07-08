@@ -140,22 +140,12 @@ function StudyCell({ stage, date }: { stage: string | null; date: string | null 
   );
 }
 
-function SignalChip({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-zinc-400">
-      {children}
-    </span>
-  );
-}
-
-function UpliftCell({ pct, bar = false, muted = false }:
-  { pct: number; bar?: boolean; muted?: boolean }) {
-  const cls = muted ? "text-zinc-400"
-    : pct > 1 ? "text-green-400" : pct < -0.1 ? "text-red-400" : "text-zinc-400";
+function UpliftCell({ pct, bar = false }: { pct: number; bar?: boolean }) {
+  const cls =
+    pct > 1 ? "text-green-400" : pct < -0.1 ? "text-red-400" : "text-zinc-400";
   // Heat strip: |pct| clamped to 150% maps to bar width.
   const width = Math.min(Math.abs(pct), 1.5) / 1.5;
-  const fill = muted ? "bg-zinc-500/50"
-    : pct >= 0 ? "bg-emerald-400/70" : "bg-red-400/70";
+  const fill = pct >= 0 ? "bg-emerald-400/70" : "bg-red-400/70";
   return (
     <span className="inline-flex items-center justify-end gap-2">
       {bar && (
@@ -321,15 +311,8 @@ function ExpandedRow({ ticker }: { ticker: string }) {
           </td>
           <td className="px-3 py-1.5 text-[12px] text-right">
             {p.latest_revaluation ? (
-              <span className="inline-flex items-center gap-1.5">
-                <UpliftCell
-                  pct={p.latest_revaluation.npv_uplift_pct}
-                  muted={!!(p.latest_revaluation.low_base || p.latest_revaluation.is_stale_study)}
-                />
-                {p.latest_revaluation.low_base && <SignalChip>low base</SignalChip>}
-                {p.latest_revaluation.is_stale_study && (
-                  <SignalChip>stale · {Math.round(p.latest_revaluation.study_age_years ?? 0)}y</SignalChip>
-                )}
+              <span>
+                <UpliftCell pct={p.latest_revaluation.npv_uplift_pct} />
                 <span className="text-zinc-600 ml-1.5 font-mono">
                   spot ${p.latest_revaluation.npv_spot.toFixed(0)}M
                 </span>
@@ -767,17 +750,10 @@ function CompaniesPageInner() {
                     </td>
                     <td className="px-3 py-2 text-[13px] text-right">
                       {c.latest_revaluation ? (
-                        <span className="inline-flex items-center gap-1.5">
-                          <UpliftCell
-                            pct={c.latest_revaluation.npv_uplift_pct}
-                            bar
-                            muted={!!(c.latest_revaluation.low_base || c.latest_revaluation.is_stale_study)}
-                          />
-                          {c.latest_revaluation.low_base && <SignalChip>low base</SignalChip>}
-                          {c.latest_revaluation.is_stale_study && (
-                            <SignalChip>stale · {Math.round(c.latest_revaluation.study_age_years ?? 0)}y</SignalChip>
-                          )}
-                        </span>
+                        <UpliftCell
+                          pct={c.latest_revaluation.npv_uplift_pct}
+                          bar
+                        />
                       ) : (
                         <span className="text-zinc-700">—</span>
                       )}

@@ -401,8 +401,12 @@ def api_company_snapshot(ticker: str):
     # ── Projects & resources ───────────────────────────────────────────
     projects_data = []
     company_id = company["company_id"]
+    # Hide study-less prose-fragment cards (JORC-extraction artifacts) — same rule
+    # as api.portfolio._junk_name_filter.
+    from api.portfolio import _junk_name_filter
     projects = conn.execute(
-        "SELECT * FROM projects WHERE company_id = ? ORDER BY created_at DESC",
+        "SELECT * FROM projects p WHERE p.company_id = ? AND " + _junk_name_filter("p")
+        + " ORDER BY p.created_at DESC",
         (company_id,),
     ).fetchall()
 

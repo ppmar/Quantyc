@@ -30,6 +30,33 @@ _LOW_BASE_NPV_M = 50.0
 _STALE_STUDY_YEARS = 3.0
 
 
+# A project whose name is announcement prose ("all holes used to inform the") and
+# which carries no study is a JORC-extraction artifact — hide it from every listing.
+# Study-bearing projects keep showing regardless of name (they hold real economics;
+# merging them is spec_junk_project_names' job). Mirror of
+# parsers.jorc_resource_estimate._looks_like_prose_fragment, in SQL.
+_JUNK_NAME_SQL = """(
+    LENGTH({p}.project_name) > 40
+    OR {p}.project_name GLOB '[a-z]*'
+    OR {p}.project_name LIKE 'the %' OR {p}.project_name LIKE 'its %'
+    OR {p}.project_name LIKE 'it %' OR {p}.project_name LIKE 'all %'
+    OR {p}.project_name LIKE 'this %' OR {p}.project_name LIKE 'that %'
+    OR {p}.project_name LIKE 'both %' OR {p}.project_name LIKE 'o %'
+    OR {p}.project_name LIKE 'details %' OR {p}.project_name LIKE 'relates %'
+    OR {p}.project_name LIKE 'release %' OR {p}.project_name LIKE 'continues %'
+    OR {p}.project_name LIKE 'strike %' OR {p}.project_name LIKE 'additional %'
+    OR {p}.project_name LIKE 'last %' OR {p}.project_name LIKE 'upper %'
+    OR {p}.project_name LIKE 'further %'
+)"""
+
+
+def _junk_name_filter(alias: str) -> str:
+    """SQL: TRUE for displayable projects (not a study-less prose-fragment card)."""
+    junk = _JUNK_NAME_SQL.format(p=alias)
+    return (f"(NOT {junk} OR EXISTS (SELECT 1 FROM studies _js "
+            f"WHERE _js.project_id = {alias}.project_id))")
+
+
 def _npv_review_reasons(reason: str | None) -> str:
     """Keep only review reasons that cast doubt on the NPV base used by the reval."""
     if not reason:
@@ -76,8 +103,21 @@ def portfolio_companies():
         WITH active_projects AS (
             SELECT p.*
             FROM projects p
-            WHERE EXISTS (SELECT 1 FROM studies WHERE project_id = p.project_id)
-               OR EXISTS (SELECT 1 FROM resources WHERE project_id = p.project_id)
+            WHERE (EXISTS (SELECT 1 FROM studies WHERE project_id = p.project_id)
+               OR EXISTS (SELECT 1 FROM resources WHERE project_id = p.project_id))
+              AND (NOT (
+    LENGTH(p.project_name) > 40
+    OR p.project_name GLOB '[a-z]*'
+    OR p.project_name LIKE 'the %' OR p.project_name LIKE 'its %'
+    OR p.project_name LIKE 'it %' OR p.project_name LIKE 'all %'
+    OR p.project_name LIKE 'this %' OR p.project_name LIKE 'that %'
+    OR p.project_name LIKE 'both %' OR p.project_name LIKE 'o %'
+    OR p.project_name LIKE 'details %' OR p.project_name LIKE 'relates %'
+    OR p.project_name LIKE 'release %' OR p.project_name LIKE 'continues %'
+    OR p.project_name LIKE 'strike %' OR p.project_name LIKE 'additional %'
+    OR p.project_name LIKE 'last %' OR p.project_name LIKE 'upper %'
+    OR p.project_name LIKE 'further %'
+) OR EXISTS (SELECT 1 FROM studies _js WHERE _js.project_id = p.project_id))
         ),
         latest_study AS (
             SELECT s.project_id,
@@ -153,6 +193,7 @@ def portfolio_companies():
         WHERE pc.is_primary = 1
           AND (EXISTS (SELECT 1 FROM studies WHERE project_id = p.project_id)
                OR EXISTS (SELECT 1 FROM resources WHERE project_id = p.project_id))
+          AND """ + _junk_name_filter("p") + """
     """)
     for r in commodity_rows:
         comms = commodity_map.setdefault(r["ticker"], [])
@@ -364,6 +405,7 @@ def portfolio_company_detail(ticker: str):
                p.country, p.state, p.region, p.ownership_pct
         FROM projects p
         WHERE p.company_id = ?
+        AND """ + _junk_name_filter("p") + """
         ORDER BY p.project_name
     """, (cid,))
 

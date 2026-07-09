@@ -165,13 +165,48 @@ def _infer_commodity(text: str) -> tuple[Optional[str], list[str]]:
     return matches[0], []
 
 
+# Words that begin a sentence fragment, not a project name ("its Jericho and
+# Eloise", "all holes used to inform the", "this style of", "details on the...").
+_NAME_FRAGMENT_STARTERS = {
+    "the", "its", "it", "all", "this", "that", "both", "o", "details", "relates",
+    "release", "continues", "strike", "additional", "last", "upper", "further",
+}
+# Verb-ish tokens that never appear inside a real deposit name.
+_NAME_VERB_TOKENS = {
+    "has", "was", "were", "will", "expected", "confirms", "demonstrates",
+    "intended", "completed", "announced", "updated", "delivers", "supports",
+    "used", "show", "unlock", "emerge",
+}
+
+
+def _looks_like_prose_fragment(name: str) -> bool:
+    """True when a captured 'project name' is a sentence fragment, not a deposit
+    name. The regex capture can swallow announcement prose (137 junk projects on
+    prod). Better a shared 'Unknown' bucket than a prose card in the UI."""
+    if len(name) > 40:
+        return True
+    words = name.split()
+    if len(words) > 5:
+        return True
+    if name[:1].islower():
+        return True
+    if words and words[0].lower() in _NAME_FRAGMENT_STARTERS:
+        return True
+    if any(w.lower() in _NAME_VERB_TOKENS for w in words):
+        return True
+    return False
+
+
 def _extract_project_name(text: str) -> Optional[str]:
-    """Extract project name from first pages text."""
+    """Extract project name from first pages text. Prose fragments are rejected
+    (null-don't-guess): the caller falls back to 'Unknown'."""
     for pattern in _PROJECT_NAME_PATTERNS:
         m = pattern.search(text)
         if m:
             name = m.group(1).strip()
             name = _PROJECT_SUFFIXES.sub("", name).strip()
+            if _looks_like_prose_fragment(name):
+                continue
             return name
     return None
 

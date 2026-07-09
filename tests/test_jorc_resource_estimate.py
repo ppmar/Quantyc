@@ -443,3 +443,20 @@ class TestClassificationHeader:
         result = parse(pdf, ticker="TST", doc_id="clf", announcement_date=date(2026, 1, 1))
         meas = next(r for r in result.rows if r.category == "Measured")
         assert meas.tonnes_mt == Decimal("3.0")
+
+
+class TestProjectNameFragmentGate:
+    def test_prose_fragments_rejected(self):
+        from parsers.jorc_resource_estimate import _looks_like_prose_fragment as frag
+        for junk in ["it has completed its annual", "all holes used to inform the",
+                     "this style of", "details on the estimation of the",
+                     "its South Junction", "continues to emerge as a new high-quality Australian gold",
+                     "o The Global", "further growth with"]:
+            assert frag(junk), junk
+
+    def test_real_names_pass(self):
+        from parsers.jorc_resource_estimate import _looks_like_prose_fragment as frag
+        for good in ["Hemi", "Sorby Hills Pb-Ag-Zn", "West Pilbara Iron Ore",
+                     "PANNAWONICA IRON ORE", "Kathleen Valley", "Mt Thirsty",
+                     "Never Never", "Kundip Mining Centre"]:
+            assert not frag(good), good

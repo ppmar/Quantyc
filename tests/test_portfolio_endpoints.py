@@ -227,3 +227,31 @@ class TestCommodityTags:
         data = client.get("/api/portfolio/companies").get_json()
         deg = next(c for c in data["companies"] if c["ticker"] == "DEG")
         assert "Li2O" not in deg["primary_commodities"]
+
+
+class TestJunkNameSuppression:
+    def test_studyless_prose_project_hidden_everywhere(self, client):
+        """A resources-only project named like announcement prose is a JORC artifact:
+        hidden from list activity, tags, and the detail breakdown. A study-bearing
+        project keeps showing regardless of name."""
+        import api.portfolio as _pf
+        conn = _pf.get_connection()
+        cid = conn.execute("SELECT company_id FROM companies WHERE ticker='DEG'").fetchone()[0]
+        junk = conn.execute(
+            "INSERT INTO projects (company_id, project_name, country, created_at) "
+            "VALUES (?, 'all holes used to inform the', 'Australia', '2020-01-01')", (cid,)).lastrowid
+        conn.execute(
+            "INSERT INTO resources (project_id, effective_date, commodity, resource_or_reserve, "
+            "category, tonnes, created_at) VALUES (?, '2024-01-01','Li2O','Resource','Indicated',1,'x')",
+            (junk,))
+        conn.execute(
+            "INSERT INTO project_commodities (project_id, commodity, is_primary) VALUES (?, 'Li2O', 1)",
+            (junk,))
+        conn.commit()
+
+        deg = next(c for c in client.get("/api/portfolio/companies").get_json()["companies"]
+                   if c["ticker"] == "DEG")
+        assert "Li2O" not in deg["primary_commodities"]        # tag hidden
+        detail = client.get("/api/portfolio/companies/DEG").get_json()
+        names = [p["project_name"] for p in detail["projects"]]
+        assert "all holes used to inform the" not in names     # card hidden
